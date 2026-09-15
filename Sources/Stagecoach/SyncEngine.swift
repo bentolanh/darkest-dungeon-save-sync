@@ -309,16 +309,16 @@ final class SyncEngine {
         try copyFiles(from: source, snapshot: snapshot, to: mirror, pruneExtras: true)
     }
 
-    /// Copies each file via a temporary name so a reader never sees a half-written save.
+    /// Copies each file atomically (written beside its target, then renamed over it)
+    /// so a reader never sees a half-written save. Plain rename-in-place matters on
+    /// the Dropbox side: FileManager's replaceItemAt parks the old copy outside the
+    /// folder first, which Dropbox reports as files being moved out and asks about.
     private func copyFiles(from source: URL, snapshot: Snapshot, to dest: URL, pruneExtras: Bool) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         for name in snapshot.files.keys.sorted() {
             let data = try Data(contentsOf: source.appendingPathComponent(name))
-            let final = dest.appendingPathComponent(name)
-            let tmp = dest.appendingPathComponent(".\(name).stagecoach.tmp")
-            try data.write(to: tmp)
-            _ = try fm.replaceItemAt(final, withItemAt: tmp)
+            try data.write(to: dest.appendingPathComponent(name), options: .atomic)
         }
         if pruneExtras, let existing = try? fm.contentsOfDirectory(atPath: dest.path) {
             for name in existing where !Snapshot.ignored(name) && snapshot.files[name] == nil {
