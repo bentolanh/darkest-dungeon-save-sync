@@ -6,7 +6,7 @@
 //   stagecoach-cli steam-write-test   read steam_init.json from the cloud and write it back unchanged
 //   stagecoach-cli sync               run one sync pass with the real folders and ledger
 //   stagecoach-cli codec-check <dir>  read and rewrite every save under a folder, byte for byte
-//   stagecoach-cli prepare <profile_N> [--without-add-ons]
+//   stagecoach-cli prepare <profile_N> [--without-add-ons] [--keep-build]
 //                                     publish a copy of a Mac campaign the iPad can open
 //   stagecoach-cli steam-push <profile_N> [folder]
 //                                     write a profile folder into Steam Cloud through the client
@@ -120,6 +120,9 @@ case "codec-check":
                 if save.serialized() != d {
                     failed += 1
                     print("  DIFFERS: \(url.path) (\(d.count) -> \(save.serialized().count))")
+                } else if let why = save.inconsistencies().first {
+                    failed += 1
+                    print("  INCONSISTENT: \(url.path): \(why)")
                 }
             } catch {
                 checked += 1; failed += 1
@@ -127,13 +130,14 @@ case "codec-check":
             }
         }
     }
-    print("\(checked - failed)/\(checked) save files read and rewritten byte for byte")
+    print("\(checked - failed)/\(checked) save files read, rewritten byte for byte, and self-consistent")
     if failed > 0 { exit(1) }
 
 case "prepare":
     guard args.count >= 2 else { print("usage: stagecoach-cli prepare profile_N [--without-add-ons]"); exit(2) }
     let profile = args[args.startIndex + 1]
     let clearAddOns = args.contains("--without-add-ons")
+    let matchBuild = !args.contains("--keep-build")
     guard let steam = Paths.detectSteamRemote(), let dropbox = Paths.detectDropboxAppFolder() else {
         print("Steam save folder or Dropbox folder not found"); exit(1)
     }
@@ -142,7 +146,7 @@ case "prepare":
     do {
         let r = try Sanitise.copy(profile: profile, from: src,
                                   to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
-                                  clearAddOnList: clearAddOns)
+                                  clearAddOnList: clearAddOns, matchIPadBuild: matchBuild)
         var led = Ledger.load()
         led.preparedForIPad[profile] = snap.digest
         led.profiles[profile] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),

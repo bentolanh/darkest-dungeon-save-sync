@@ -12,8 +12,14 @@
 // it, how many fields sit directly inside it, and how many counting descendants.
 // A field-table entry is three: a hash of the name, where the field starts within
 // the data section, and a packed word — bit 0 says the field is an object, bits
-// 2 to 10 the length of its name including the trailing zero, and the rest the
-// object it refers to.
+// 2 to 10 the length of its name including the trailing zero, and bits 11 to 30
+// the object it refers to. Bit 31 is a flag whose meaning is not known here; it
+// appears on objects and plain fields alike, on hundreds of fields in some files
+// and none in others. What matters is that it is not part of the object number.
+// Read as though it were, it turns that number into 1048576, and renumbering
+// after a removal then destroys both the flag and the number — which is exactly
+// how a published copy once came to crash the iPad while it was still reading
+// the folder. It is kept apart here and written back untouched.
 //
 // In the data section each field is its name, a zero byte, then its value. The
 // value's own layout depends on a type this file never records, so values are
@@ -29,9 +35,13 @@ struct SaveFile {
         var hash: UInt32
         var name: String
         var isObject: Bool
-        var object: Int        // index into `objects` when isObject
+        var object: Int        // index into `objects` when isObject (bits 11-30)
+        var flag: Bool         // bit 31, preserved exactly; its meaning is not known here
         var value: [UInt8]     // everything between the name's zero byte and the next field
     }
+
+    /// What Steam's current build stamps into a save, for messages only.
+    static let steamBuildHint = 27850
 
     var header: [UInt8]        // the original 64 bytes; offsets within are rewritten on output
     var objects: [Object]
@@ -75,7 +85,8 @@ struct SaveFile {
             let next = i + 1 < fieldCount ? dataOffset + (try u32(fieldOffset + (i + 1) * 12 + 4)) : dataOffset + dataLength
             guard nameLength >= 1, start + nameLength <= next, next <= b.count else { throw Failure.truncated }
             let name = String(bytes: b[start..<(start + nameLength - 1)], encoding: .utf8) ?? ""
-            return Field(hash: hash, name: name, isObject: info & 1 == 1, object: info >> 11,
+            return Field(hash: hash, name: name, isObject: info & 1 == 1,
+                         object: (info >> 11) & 0xFFFFF, flag: info >> 31 == 1,
                          value: Array(b[(start + nameLength)..<next]))
         }
     }
@@ -93,7 +104,8 @@ struct SaveFile {
         for o in objects { objectTable += p32(o.parent) + p32(o.nameField) + p32(o.direct) + p32(o.all) }
         var fieldTable: [UInt8] = []
         for (f, off) in zip(fields, offsets) {
-            let info = (f.object << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0)
+            let info = (f.flag ? 1 << 31 : 0) | ((f.object & 0xFFFFF) << 11)
+                | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0)
             fieldTable += p32(Int(f.hash)) + p32(off) + p32(info)
         }
         var out = header
@@ -102,6 +114,25 @@ struct SaveFile {
         put(44, fields.count); put(48, 64 + objectTable.count)
         put(56, data.count); put(60, 64 + objectTable.count + fieldTable.count)
         return Data(out + objectTable + fieldTable + data)
+    }
+
+    /// The game build that wrote this file. The header carries the low two bytes
+    /// of the build number, so a save from Steam reads 27850 and one written on
+    /// the iPad reads 24774.
+    var build: Int {
+        get { Int(header[6]) | Int(header[7]) << 8 }
+        set { header[6] = UInt8(newValue & 0xff); header[7] = UInt8((newValue >> 8) & 0xff) }
+    }
+
+    /// The object a field sits inside: the innermost object whose run of
+    /// descendants covers it. Nil for the root field itself.
+    func owner(of field: Int) -> Int? {
+        var best: (start: Int, object: Int)?
+        for (i, o) in objects.enumerated() {
+            guard o.nameField < field, field <= o.nameField + o.all else { continue }
+            if best == nil || o.nameField > best!.start { best = (o.nameField, i) }
+        }
+        return best?.object
     }
 
     // MARK: - Editing
@@ -137,6 +168,12 @@ struct SaveFile {
     @discardableResult
     mutating func removeObject(named name: String, under parent: String? = nil) -> Bool {
         guard let field = indexOfObject(named: name, under: parent) else { return false }
+        return removeObject(at: field)
+    }
+
+    @discardableResult
+    mutating func removeObject(at field: Int) -> Bool {
+        guard field < fields.count, fields[field].isObject else { return false }
         let object = fields[field].object
         guard object < objects.count else { return false }
         let fieldSpan = 1 + objects[object].all
@@ -171,6 +208,77 @@ struct SaveFile {
             if fields[i].object >= object + objectSpan { fields[i].object -= objectSpan }
         }
         return true
+    }
+
+    /// Removes every field with this name, whether it introduces an object or
+    /// holds a plain value, and returns how many went. Used to take structures a
+    /// newer game build added back out again.
+    @discardableResult
+    mutating func removeAll(named name: String) -> Int {
+        var removed = 0
+        while true {
+            guard let i = fields.firstIndex(where: { $0.name == name }) else { return removed }
+            if fields[i].isObject {
+                guard removeObject(at: i) else { return removed }
+            } else {
+                guard removePlainField(at: i) else { return removed }
+            }
+            removed += 1
+        }
+    }
+
+    /// Removes one value-carrying field, correcting the counts above it.
+    @discardableResult
+    mutating func removePlainField(at field: Int) -> Bool {
+        guard field < fields.count, !fields[field].isObject, let parent = owner(of: field) else { return false }
+        objects[parent].direct -= 1
+        var ancestor: Int? = parent
+        while let a = ancestor {
+            objects[a].all -= 1
+            ancestor = a == 0 ? nil : objects[a].parent
+        }
+        fields.remove(at: field)
+        for i in objects.indices where objects[i].nameField > field { objects[i].nameField -= 1 }
+        return true
+    }
+
+    /// Rebuilds the object tree from the field list and checks the file agrees
+    /// with itself. Round-tripping is not enough: a wrong number written back
+    /// exactly as it was read still round-trips. This is what catches an edit
+    /// that left the tables disagreeing.
+    func inconsistencies() -> [String] {
+        var problems: [String] = []
+        for (i, o) in objects.enumerated() {
+            guard o.nameField >= 0, o.nameField < fields.count else {
+                problems.append("object \(i) names field \(o.nameField), which is not there"); continue
+            }
+            let f = fields[o.nameField]
+            if !f.isObject { problems.append("object \(i) is named by '\(f.name)', which is not an object") }
+            else if f.object != i { problems.append("object \(i) is named by '\(f.name)', which points at \(f.object)") }
+            if i > 0, o.parent < 0 || o.parent >= objects.count {
+                problems.append("object \(i) has parent \(o.parent), which is not there")
+            }
+        }
+        guard problems.isEmpty else { return problems }
+
+        var direct = [Int](repeating: 0, count: objects.count)
+        var all = [Int](repeating: 0, count: objects.count)
+        for i in 1..<max(fields.count, 1) {
+            guard let own = owner(of: i) else { problems.append("field \(i) '\(fields[i].name)' sits in no object"); continue }
+            direct[own] += 1
+            var a: Int? = own
+            var seen = Set<Int>()
+            while let x = a, !seen.contains(x) {
+                seen.insert(x); all[x] += 1
+                a = x == 0 ? nil : objects[x].parent
+            }
+        }
+        for (i, o) in objects.enumerated() {
+            let name = o.nameField < fields.count ? fields[o.nameField].name : "?"
+            if o.direct != direct[i] { problems.append("'\(name)' claims \(o.direct) fields inside it, the tree has \(direct[i])") }
+            if o.all != all[i] { problems.append("'\(name)' claims \(o.all) in total, the tree has \(all[i])") }
+        }
+        return problems
     }
 
     /// True when these raw bytes appear anywhere in the file's names or values.

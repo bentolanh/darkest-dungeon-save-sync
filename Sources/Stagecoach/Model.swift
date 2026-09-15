@@ -22,6 +22,7 @@ final class Model: ObservableObject {
     @Published var cloudPush: Bool { didSet { defaults.set(cloudPush, forKey: "cloudPush"); rebuild() } }
     @Published var publishIncompatible: Bool { didSet { defaults.set(publishIncompatible, forKey: "publishIncompatible"); engine?.setPublishIncompatible(publishIncompatible) } }
     @Published var clearAddOnList: Bool { didSet { defaults.set(clearAddOnList, forKey: "clearAddOnList"); engine?.config.clearAddOnList = clearAddOnList } }
+    @Published var matchIPadBuild: Bool { didSet { defaults.set(matchIPadBuild, forKey: "matchIPadBuild"); engine?.config.matchIPadBuild = matchIPadBuild } }
     @Published var launchAtLogin: Bool { didSet { setLaunchAtLogin(launchAtLogin) } }
 
     private let defaults = UserDefaults.standard
@@ -35,6 +36,7 @@ final class Model: ObservableObject {
         cloudPush = defaults.object(forKey: "cloudPush") as? Bool ?? true
         publishIncompatible = defaults.object(forKey: "publishIncompatible") as? Bool ?? false
         clearAddOnList = defaults.object(forKey: "clearAddOnList") as? Bool ?? false
+        matchIPadBuild = defaults.object(forKey: "matchIPadBuild") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         rebuild()
@@ -93,6 +95,7 @@ final class Model: ObservableObject {
         config.cloudPush = cloudPush
         config.publishIncompatible = publishIncompatible
         config.clearAddOnList = clearAddOnList
+        config.matchIPadBuild = matchIPadBuild
         config.steamHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/stagecoach-cli")
         if !FileManager.default.isExecutableFile(atPath: config.steamHelper!.path) { config.steamHelper = nil }
         let engine = SyncEngine(config: config)

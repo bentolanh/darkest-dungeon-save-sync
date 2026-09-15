@@ -45,45 +45,64 @@ save**. Whichever loses is still in the backups folder.
 On the very first run there is no history yet, so the newer of the two wins
 and the log says which.
 
-### Saves the iPad cannot open, and the tool that fixes them
+### Saves the iPad cannot open, and the tool that tries to fix them
 
-The Mac build has The Butcher's Circus, the free player-versus-player add-on
-that never came to iOS. When it is active the game records a `circus` building
-in the estate's Hamlet, and the iPad — which has no such building — crashes
-opening the campaign. Red Hook's import article warns that saves carrying
-content the iPad lacks "may result in errors"; this is that.
+The two games are far apart. Every save carries the build that wrote it, and
+Steam's is **27850** while the iPad's is **24774** — the iPad edition was last
+given new content in 2019 and last released in 2022. Red Hook's import article
+warns that a save carrying content the iPad lacks "may result in errors"; this
+is that, several times over.
 
-Nothing is wrong with the copying. The bytes reach Dropbox intact. It is the
-content the iPad cannot read.
+Two kinds of difference matter:
 
-So a Mac save is checked before it is published, and held back if it carries
-that content, with the campaign named and the reason given. The panel then
-offers **Prepare a copy for the iPad**. Press it and Stagecoach publishes a
-copy with two things taken out:
+- **The Butcher's Circus.** The free player-versus-player add-on never came to
+  iOS. With it active the game records a `circus` building in the Hamlet, which
+  the iPad has no code for.
+- **Structures the newer build added.** A save-tampering record in the estate,
+  a trinket-feedback log, and five fields on every hero — `added_buffs`,
+  `did_transform`, `hero_name`, `previous_trinket_id`, `trinkets_gained_count`
+  — in the estate, the quest and the town.
 
-- the Circus building in the Hamlet, and
-- the note that the game once advertised the Butcher's Circus to you.
+So a Mac save is checked before it is published, held back if it carries the
+Circus, and the panel offers **Prepare a copy for the iPad**. That publishes a
+copy stamped with the iPad's build, with those structures taken out. The Steam
+save is never touched.
 
-Everything else is carried through byte for byte, the campaign's own add-ons
-included — Crimson Court, Shieldbreaker, Colour of Madness are all sold for the
-iPad and stay switched on. The Steam save is never touched; it keeps its
-Circus. Nothing is published unless the finished copy reads back as the same
-save and no longer carries anything known to crash the iPad.
+Every removal in that list was checked against two saves the iPad wrote itself:
+the field appears in the Steam save and nowhere in either iPad save, **in that
+file**. The file is the whole point. `hero_name` is new inside the estate but
+the iPad has always written it in the campaign log, a hundred times over, and
+`heroes` is the iPad's own word in three files. Taking either out everywhere
+would have thrown away the campaign's history. Both are left alone where the
+iPad uses them.
 
-The button is yours to press. It never runs on its own, because it produces a
-save that is deliberately not what the Mac holds.
+What is carried through untouched: every hero blob in the roster, byte for
+byte, and every name the iPad writes.
+
+Every rewritten file is checked twice before anything is published: it must
+read back as the same bytes, and its object tree must agree with itself —
+every object's count of what is inside it recomputed from the fields and
+compared with what it claims. The second check exists because the first is not
+enough. A number read wrongly and written back unchanged round-trips perfectly
+while describing a tree that no longer exists, and that is what once put a
+corrupted copy in front of the iPad.
+
+**Known remaining difference.** The Mac's sanitarium records a `trinketId` on
+each quirk. Neither iPad save has ever written a quirk entry at all, so there
+is no evidence about whether its build knows that field. It is left in rather
+than guessed at.
 
 **Better still, don't enable it.** In Steam, right-click Darkest Dungeon →
-Properties → DLC and uncheck The Butcher's Circus. Campaigns you play after
-that stop recording the Circus, and travel to the iPad with no preparation at
-all. You lose only the player-versus-player mode, which the iPad never had.
+Properties → DLC and uncheck The Butcher's Circus. That removes the first kind
+of difference at the source. It does not touch the second.
 
-One thing preparing cannot change: which add-ons a campaign uses is fixed when
-the campaign is created and cannot be switched off afterwards, on any platform.
-That is the game's own rule, not the Butcher's Circus, and it is why an
-imported campaign shows its add-ons locked on the iPad.
+One thing preparing cannot change: the iPad writes its own `persist.game.json`
+when it imports, so nothing in that file survives the trip — which is why
+clearing the campaign's add-on list has no effect. And which add-ons a campaign
+uses is fixed when the campaign is created, on any platform, which is why an
+imported campaign shows them locked.
 
-What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
+What it cannot see:What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
 there. If you export from the iPad without having imported the latest Mac
 save, the Mac's progress is replaced (and backed up), the same as it would be
 by hand. Also, merely opening a campaign on the Mac rewrites a few save files,

@@ -31,6 +31,7 @@ struct SyncConfig {
     var cloudPush = true
     var publishIncompatible = false   // publish a Mac save the iPad can't load anyway
     var clearAddOnList = false        // when preparing, also clear the campaign's add-on list
+    var matchIPadBuild = false        // when preparing, down-convert to the build the iPad writes
     var quietSeconds: TimeInterval = 5
     var gameIsRunning: () -> Bool = { Processes.gameIsRunning }
     var steamIsRunning: () -> Bool = { Processes.steamIsRunning }
@@ -530,7 +531,8 @@ final class SyncEngine {
             do {
                 let report = try Sanitise.copy(profile: profile, from: source,
                                                to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
-                                               clearAddOnList: self.config.clearAddOnList)
+                                               clearAddOnList: self.config.clearAddOnList,
+                                               matchIPadBuild: self.config.matchIPadBuild)
                 self.ledger.preparedForIPad[profile] = snap.digest
                 self.ledger.profiles[profile] = ProfileRecord(syncedDigest: snap.digest,
                                                               syncedSaveTime: saveTime(of: source, snapshot: snap),

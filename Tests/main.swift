@@ -283,7 +283,8 @@ func dsonFile(objects: [(parent: Int, nameField: Int, direct: Int, all: Int)],
     var ot: [UInt8] = []; for o in objects { ot += p32(o.parent) + p32(o.nameField) + p32(o.direct) + p32(o.all) }
     var ft: [UInt8] = []
     for (f, off) in zip(fields, offs) {
-        ft += p32(0) + p32(off) + p32((f.object << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0))
+        let root = (f.name == "base_root") ? (1 << 31) : 0
+        ft += p32(0) + p32(off) + p32(root | ((f.object & 0xFFFFF) << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0))
     }
     var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
     func put(_ o: Int, _ v: Int) { let p = p32(v); h[o] = p[0]; h[o+1] = p[1]; h[o+2] = p[2]; h[o+3] = p[3] }
@@ -428,6 +429,66 @@ check(Readiness.check(profileDir: guardExport) == .ready, "a complete folder is 
 settle()
 check(read(sal, "persist.roster.json") == "ipad-real", "and only then is it imported")
 check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260920_100000_upload").path), "and archived")
+
+print("7h. A copy can be written as the build the iPad runs")
+// A file shaped like a roster from the newer build: the old raw_data plus the
+// second copy of the roster and per-hero fields that build added.
+let rosterLike = dsonFile(
+    objects: [(0, 0, 3, 6), (0, 2, 3, 3)],
+    fields: [("base_root", true, 0, []), ("raw_data", false, 0, [7, 0, 0, 0]),
+             ("heroes", true, 1, []), ("added_buffs", false, 0, [1, 0, 0, 0]),
+             ("did_transform", false, 0, [1, 0, 0, 0]), ("hero_name", false, 0, [2, 0, 0, 0]),
+             ("last_party", false, 0, [9, 0, 0, 0])])
+var r = try! SaveFile(rosterLike)
+check(r.serialized() == rosterLike, "the newer-build roster round-trips")
+check(r.build == 0, "its build stamp reads back")
+r.build = Sanitise.iPadBuild
+check(r.removeAll(named: "heroes") == 1, "an object comes out with everything inside it")
+check(r.removeAll(named: "added_buffs") == 0, "which took the fields inside it too")
+let rOut = r.serialized(); let rBack = try! SaveFile(rOut)
+check(rBack.serialized() == rOut, "the result is stable")
+check(rBack.build == Sanitise.iPadBuild, "and carries the iPad's build stamp")
+check(rBack.fields.map(\.name) == ["base_root", "raw_data", "last_party"], "the old hero store and everything else survive")
+check(rBack.fields.first(where: { $0.name == "raw_data" })?.value == [7, 0, 0, 0], "hero bytes untouched")
+
+// A plain field standing on its own is removed with the counts corrected.
+var flat = try! SaveFile(dsonFile(
+    objects: [(0, 0, 3, 3)],
+    fields: [("base_root", true, 0, []), ("version", false, 0, [1, 0, 0, 0]),
+             ("foundLocalTamperedFile", false, 0, [0]), ("amount", false, 0, [5, 0, 0, 0])]))
+check(flat.removeAll(named: "foundLocalTamperedFile") == 1, "a lone newer field is removed")
+let fOut = flat.serialized(); let fBack = try! SaveFile(fOut)
+check(fBack.serialized() == fOut && fBack.objects[0].direct == 2 && fBack.objects[0].all == 2,
+      "and the object's counts come down with it")
+check(fBack.fields.map(\.name) == ["base_root", "version", "amount"], "leaving the rest in order")
+
+// The list only ever names a field together with the file it may leave.
+check(Sanitise.newerThanIPad.allSatisfy { $0.file.hasSuffix(".json") }, "every removal names the file it applies to")
+check(!Sanitise.newerThanIPad.contains { $0.field == "heroes" }, "'heroes' is never removed — the iPad writes it too")
+check(!Sanitise.newerThanIPad.contains { $0.file == "persist.campaign_log.json" && $0.field == "hero_name" },
+      "'hero_name' is left alone in the campaign log, where the iPad writes it")
+check(Sanitise.newerThanIPad.contains { $0.file == "persist.estate.json" && $0.field == "hero_name" },
+      "but removed from the estate, where it is new")
+
+// The root field carries a flag in its top bit. Reading it as part of the object
+// number and then renumbering destroys both — this is what broke the iPad import.
+var rootCheck = try! SaveFile(town)
+check(rootCheck.fields[0].flag, "the top-bit flag is read separately from the object number")
+check(rootCheck.fields[0].object == 0, "so that field's object number reads as 0, not 1048576")
+check(!rootCheck.fields[1].flag, "and a field without it reads as not having it")
+check(rootCheck.removeObject(named: "circus", under: "buildings"), "remove an object")
+let rcOut = rootCheck.serialized(); let rcBack = try! SaveFile(rcOut)
+check(rcBack.fields[0].flag && rcBack.fields[0].object == 0,
+      "the flag and the object number both survive a removal intact")
+check(rcBack.serialized() == rcOut, "and the file is stable afterwards")
+
+// The tree check is what would have caught the root-flag bug before publishing.
+check(try! SaveFile(town).inconsistencies().isEmpty, "a sound save reports nothing wrong")
+var wrecked = try! SaveFile(town); wrecked.objects[1].direct = 9
+check(!wrecked.inconsistencies().isEmpty, "a save whose counts do not match its tree is caught")
+var wrecked2 = try! SaveFile(town); wrecked2.fields[0].object = 1048576
+check(!wrecked2.inconsistencies().isEmpty, "and so is a root field whose number was mangled")
+check(rcBack.inconsistencies().isEmpty, "the result of a real removal holds together")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)
