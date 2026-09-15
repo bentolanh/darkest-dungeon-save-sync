@@ -100,16 +100,19 @@ case "steam-push":
             try s.write("\(profile)/\(name)", data)
             print("  wrote \(profile)/\(name) (\(data.count) bytes)")
         }
+        s.close()
+        SteamCloudSession.nudge(library: lib)
         print("pushed \(snap.files.count) files; Steam uploads them now")
     } catch { print("failed: \(error)"); exit(1) }
 
 case "sync":
     let dropbox = Paths.detectDropboxAppFolder()
     let root = dropbox?.deletingLastPathComponent().deletingLastPathComponent()
-    let config = SyncConfig(steamRemote: Paths.detectSteamRemote(), dropboxFolder: dropbox,
+    var config = SyncConfig(steamRemote: Paths.detectSteamRemote(), dropboxFolder: dropbox,
                             archiveFolder: root?.appendingPathComponent("Darkest Dungeon Save Sync/Imported exports", isDirectory: true),
                             backupsFolder: Paths.supportDir.appendingPathComponent("Backups", isDirectory: true),
                             steamworksLibrary: Paths.detectSteamworksLibrary())
+    config.steamHelper = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
     let engine = SyncEngine(config: config)
     engine.log = { print("  \($0)") }
     engine.syncNow(reason: "cli")

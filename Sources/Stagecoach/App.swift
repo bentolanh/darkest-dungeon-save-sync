@@ -72,6 +72,17 @@ struct PanelView: View {
                 Label("Waiting for Dropbox to finish downloading \(model.status.waitingForDownload.joined(separator: ", "))", systemImage: "icloud.and.arrow.down")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if !model.status.exportsStuck.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("\(model.status.exportsStuck.joined(separator: ", ")) is still inside Apps/DarkestDungeon", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).font(.callout.bold())
+                    Text("Its save is already imported, but the iPad's Import hangs while an export folder is there. Dropbox asks to confirm moving it out; click Move when it asks.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Move it out now") { model.retryArchive() }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+            }
             if model.status.waitingForGameToQuit {
                 Label("An iPad save is waiting; it goes in when Darkest Dungeon quits.", systemImage: "gamecontroller")
                     .font(.caption).foregroundStyle(.orange)
@@ -123,6 +134,7 @@ struct PanelView: View {
         switch p.record?.cloudState {
         case "uploaded": return "up to date"
         case "pendingGameLaunch": return "at next launch"
+        case "pendingUpload": return "uploading…"
         default: return "–"
         }
     }

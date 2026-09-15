@@ -87,6 +87,8 @@ final class Model: ObservableObject {
                                 steamworksLibrary: steamworksLibrary)
         config.archiveExports = archiveExports
         config.cloudPush = cloudPush
+        config.steamHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/stagecoach-cli")
+        if !FileManager.default.isExecutableFile(atPath: config.steamHelper!.path) { config.steamHelper = nil }
         let engine = SyncEngine(config: config)
         engine.log = { [weak self] line in Task { @MainActor in self?.append(line) } }
         engine.notify = { title, body in
@@ -106,6 +108,8 @@ final class Model: ObservableObject {
     func syncNow() { refreshProcesses(); engine?.sync(reason: "sync now") }
 
     func resolve(_ c: Conflict, keep: String) { engine?.resolve(conflict: c.id, keep: keep) }
+
+    func retryArchive() { engine?.retryArchive() }
 
     func refreshProcesses() {
         steamRunning = Processes.steamIsRunning

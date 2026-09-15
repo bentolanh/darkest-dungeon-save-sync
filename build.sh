@@ -9,7 +9,7 @@ BUILD_DIR="build"
 APP="$BUILD_DIR/$APP_NAME.app"
 SDK="$(xcrun --show-sdk-path)"
 TARGET="$(uname -m)-apple-macos15.0"
-ENGINE="Sources/Stagecoach/Paths.swift Sources/Stagecoach/Snapshot.swift Sources/Stagecoach/Ledger.swift Sources/Stagecoach/SyncEngine.swift Sources/Stagecoach/SteamCloud.swift Sources/Stagecoach/Processes.swift Sources/Stagecoach/Watcher.swift"
+ENGINE="Sources/Stagecoach/SteamCache.swift Sources/Stagecoach/Paths.swift Sources/Stagecoach/Snapshot.swift Sources/Stagecoach/Ledger.swift Sources/Stagecoach/SyncEngine.swift Sources/Stagecoach/SteamCloud.swift Sources/Stagecoach/Processes.swift Sources/Stagecoach/Watcher.swift"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -23,6 +23,9 @@ echo "Compiling the command-line helper…"
 swiftc -swift-version 5 -O -sdk "$SDK" -target "$TARGET" \
   $ENGINE Sources/CLI/main.swift \
   -o "$BUILD_DIR/stagecoach-cli"
+
+mkdir -p "$APP/Contents/Helpers"
+cp "$BUILD_DIR/stagecoach-cli" "$APP/Contents/Helpers/stagecoach-cli"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -52,6 +55,7 @@ rm -rf "$BUILD_DIR/AppIcon.iconset"
 iconutil -c icns "$BUILD_DIR/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 
 echo "Signing…"
+codesign --force --sign - "$APP/Contents/Helpers/stagecoach-cli" >/dev/null 2>&1 || true
 codesign --force --sign - "$APP" >/dev/null 2>&1 || echo "  (ad-hoc signing skipped)"
 
 echo "Built $APP and $BUILD_DIR/stagecoach-cli"

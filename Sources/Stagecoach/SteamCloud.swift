@@ -111,12 +111,22 @@ final class SteamCloudSession {
 
     deinit { close() }
 
+    /// Ends the session. Pending uploads are handed to the client during a short
+    /// callbacks loop first; the client finishes them on its own afterwards.
     func close() {
         guard !closed else { return }
         closed = true
-        runCallbacks()
+        let until = Date().addingTimeInterval(2)
+        while Date() < until { runCallbacks(); Thread.sleep(forTimeInterval: 0.1) }
         shutdown()
         dlclose(handle)
+    }
+
+    /// Opening and closing one more short session makes the client flush whatever
+    /// the previous one left queued (observed: files stay "pending" until then).
+    static func nudge(library: URL) {
+        Thread.sleep(forTimeInterval: 1)
+        if let s = try? SteamCloudSession(library: library) { s.close() }
     }
 
     var cloudEnabledForAccount: Bool { cloudForAccount(storage) }

@@ -26,6 +26,7 @@ struct SyncConfig {
     var archiveFolder: URL?
     var backupsFolder: URL
     var steamworksLibrary: URL?
+    var steamHelper: URL?              // stagecoach-cli; the push runs there so the process can exit
     var archiveExports = true
     var cloudPush = true
     var quietSeconds: TimeInterval = 5
@@ -47,6 +48,7 @@ struct SyncStatus: Equatable {
     var profiles: [ProfileStatus] = []
     var conflicts: [Conflict] = []
     var waitingForDownload: [String] = []
+    var exportsStuck: [String] = []          // consumed exports still inside Apps/DarkestDungeon
     var waitingForGameToQuit = false
     var lastTick: Date?
     var lastError: String?
@@ -97,6 +99,7 @@ final class SyncEngine {
         var st = SyncStatus(lastTick: config.now())
         defer {
             st.conflicts = ledger.conflicts
+            st.exportsStuck = archiveFailures
             status = st
             statusChanged(st)
         }
@@ -286,13 +289,21 @@ final class SyncEngine {
         var cloudState = "pendingGameLaunch"
         if config.cloudPush, let lib = config.steamworksLibrary, config.steamIsRunning() {
             do {
-                let session = try SteamCloudSession(library: lib)
-                defer { session.close() }
-                for name in snapshot.files.keys.sorted() {
-                    let data = try Data(contentsOf: source.appendingPathComponent(name))
-                    try session.write("\(profile)/\(name)", data)
+                try pushToCloud(profile: profile, folder: source, snapshot: snapshot, library: lib)
+                // The client uploads on the next "game launch": one more short session,
+                // started after it has noticed the first one ending, is that launch.
+                // Its own record (remotecache.vdf) then says whether the upload went through.
+                Thread.sleep(forTimeInterval: 3)
+                let before = waitForUpload(profile: profile, names: Array(snapshot.files.keys), seconds: 0).count
+                nudgeCloud(library: lib)
+                let pending = waitForUpload(profile: profile, names: Array(snapshot.files.keys), seconds: 15)
+                log("\(profile): Steam marked \(before) file(s) pending before the nudge, \(pending.count) after (\(config.steamHelper == nil ? "in-process" : "helper"))")
+                if pending.isEmpty {
+                    cloudState = "uploaded"
+                } else {
+                    log("\(profile): written through Steam, but \(pending.count) file(s) still show as pending upload; Steam finishes them on its own or at the next launch")
+                    cloudState = "pendingUpload"
                 }
-                cloudState = "uploaded"
             } catch {
                 log("\(profile): Steam Cloud push failed (\(error)); copying the files instead")
             }
@@ -304,21 +315,68 @@ final class SyncEngine {
         return cloudState
     }
 
+    private func pushToCloud(profile: String, folder: URL, snapshot: Snapshot, library: URL) throws {
+        if let helper = config.steamHelper {
+            let p = Process()
+            p.executableURL = helper
+            p.arguments = ["steam-push", profile, folder.path]
+            let out = Pipe(); p.standardOutput = out; p.standardError = out
+            try p.run()
+            p.waitUntilExit()
+            let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            log("\(profile): helper pid \(p.processIdentifier) exited \(p.terminationStatus): \(text.split(separator: "\n").last.map(String.init) ?? "")")
+            guard p.terminationStatus == 0 else {
+                throw SteamCloudError.writeFailed(text.split(separator: "\n").last.map(String.init) ?? "helper failed")
+            }
+        } else {
+            let session = try SteamCloudSession(library: library)
+            defer { session.close() }
+            for name in snapshot.files.keys.sorted() {
+                try session.write("\(profile)/\(name)", try Data(contentsOf: folder.appendingPathComponent(name)))
+            }
+        }
+    }
+
+    private func nudgeCloud(library: URL) {
+        if let helper = config.steamHelper {
+            let p = Process(); p.executableURL = helper; p.arguments = ["steam-check"]
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try? p.run(); p.waitUntilExit()
+        } else {
+            SteamCloudSession.nudge(library: library)
+        }
+    }
+
+    /// Polls Steam's remotecache.vdf until none of the profile's files is marked pending.
+    private func waitForUpload(profile: String, names: [String], seconds: TimeInterval) -> [String] {
+        guard let steam = config.steamRemote else { return [] }
+        let cache = steam.deletingLastPathComponent().appendingPathComponent("remotecache.vdf")
+        let deadline = Date().addingTimeInterval(seconds)
+        var pending: [String] = []
+        repeat {
+            pending = SteamCache.pendingFiles(in: cache).filter { names.contains($0.replacingOccurrences(of: "\(profile)/", with: "")) && $0.hasPrefix("\(profile)/") }
+            if pending.isEmpty { return [] }
+            Thread.sleep(forTimeInterval: 1)
+        } while Date() < deadline
+        return pending
+    }
+
     private func writeMirror(profile: String, from source: URL, snapshot: Snapshot, dropbox: URL) throws {
         let mirror = dropbox.appendingPathComponent(profile, isDirectory: true)
         try copyFiles(from: source, snapshot: snapshot, to: mirror, pruneExtras: true)
     }
 
-    /// Copies each file atomically (written beside its target, then renamed over it)
-    /// so a reader never sees a half-written save. Plain rename-in-place matters on
-    /// the Dropbox side: FileManager's replaceItemAt parks the old copy outside the
-    /// folder first, which Dropbox reports as files being moved out and asks about.
+    /// Overwrites each file in place. No temporary names, no renames, no deletes:
+    /// on the Dropbox side any file removed or moved makes Dropbox stop and ask
+    /// the user, and a rename over the old file counts as removing it.
     private func copyFiles(from source: URL, snapshot: Snapshot, to dest: URL, pruneExtras: Bool) throws {
         let fm = FileManager.default
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         for name in snapshot.files.keys.sorted() {
             let data = try Data(contentsOf: source.appendingPathComponent(name))
-            try data.write(to: dest.appendingPathComponent(name), options: .atomic)
+            let target = dest.appendingPathComponent(name)
+            if let existing = try? Data(contentsOf: target), existing == data { continue }
+            try data.write(to: target)
         }
         if pruneExtras, let existing = try? fm.contentsOfDirectory(atPath: dest.path) {
             for name in existing where !Snapshot.ignored(name) && snapshot.files[name] == nil {
@@ -344,10 +402,23 @@ final class SyncEngine {
         }
     }
 
+    /// Exports that couldn't be moved out (Dropbox asks the user to confirm a move
+    /// out of the app folder; a cancelled dialog fails the move). Not retried until
+    /// the user asks, so the dialog doesn't come back every half minute.
+    private(set) var archiveFailures: [String] = []
+
+    func retryArchive() {
+        queue.async {
+            self.archiveFailures.removeAll()
+            self.tick(reason: "retry moving exports")
+        }
+    }
+
     private func archiveIfWanted(_ folder: URL) {
         guard config.archiveExports, let archive = config.archiveFolder else { return }
         let fm = FileManager.default
         guard fm.fileExists(atPath: folder.path) else { return }
+        guard !archiveFailures.contains(folder.lastPathComponent) else { return }
         do {
             try fm.createDirectory(at: archive, withIntermediateDirectories: true)
             var dest = archive.appendingPathComponent(folder.lastPathComponent)
@@ -358,7 +429,8 @@ final class SyncEngine {
             try fm.moveItem(at: folder, to: dest)
             log("\(folder.lastPathComponent): moved out of Apps/DarkestDungeon so the iPad's Import keeps working")
         } catch {
-            log("\(folder.lastPathComponent): could not move to the archive: \(error)")
+            archiveFailures.append(folder.lastPathComponent)
+            log("\(folder.lastPathComponent): could not move it out of Apps/DarkestDungeon (\(error.localizedDescription)); the iPad's Import will hang until it's moved")
         }
     }
 
