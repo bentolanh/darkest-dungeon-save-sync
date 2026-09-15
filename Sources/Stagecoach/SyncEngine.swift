@@ -29,6 +29,8 @@ struct SyncConfig {
     var steamHelper: URL?              // stagecoach-cli; the push runs there so the process can exit
     var archiveExports = true
     var cloudPush = true
+    var publishIncompatible = false   // publish a Mac save the iPad can't load anyway
+    var clearAddOnList = false        // when preparing, also clear the campaign's add-on list
     var quietSeconds: TimeInterval = 5
     var gameIsRunning: () -> Bool = { Processes.gameIsRunning }
     var steamIsRunning: () -> Bool = { Processes.steamIsRunning }
@@ -39,6 +41,8 @@ struct ProfileStatus: Identifiable, Equatable {
     var id: String { profile }
     var profile: String
     var estate: String?
+    var issues: [CompatibilityIssue] = []
+    var preparedForIPad = false
     var macNewest: Date?
     var mirrorNewest: Date?
     var inStep: Bool
@@ -50,6 +54,7 @@ struct SyncStatus: Equatable {
     var conflicts: [Conflict] = []
     var waitingForDownload: [String] = []
     var exportsStuck: [String] = []          // consumed exports still inside Apps/DarkestDungeon
+    var heldBack: [ProfileStatus] = []       // Mac saves not published: the iPad would crash on them
     var waitingForGameToQuit = false
     var lastTick: Date?
     var lastError: String?
@@ -61,6 +66,7 @@ final class SyncEngine {
     private let ledgerURL: URL
     private let queue = DispatchQueue(label: "stagecoach.engine")
     private var stability: [String: (signature: String, since: Date)] = [:]
+    private var warnedIncompatible: Set<String> = []
     private var pendingRetry: DispatchWorkItem?
 
     var log: (String) -> Void = { print($0) }
@@ -101,6 +107,7 @@ final class SyncEngine {
         defer {
             st.conflicts = ledger.conflicts
             st.exportsStuck = archiveFailures
+            st.heldBack = st.profiles.filter { !$0.issues.isEmpty && !config.publishIncompatible && !$0.preparedForIPad }
             status = st
             statusChanged(st)
         }
@@ -125,10 +132,33 @@ final class SyncEngine {
                 needRetry = true
                 break
             }
+            let unready = profileFolders(in: folder)
+                .map { ($0, Readiness.check(profileDir: folder.appendingPathComponent($0, isDirectory: true))) }
+                .filter { !$0.1.isReady }
+            if !unready.isEmpty {
+                for (slot, verdict) in unready {
+                    log("\(name)/\(slot): waiting — \(verdict.describe)")
+                }
+                st.waitingForDownload.append(name)
+                needRetry = true
+                break
+            }
             var done = true
             for (sourceProfile, profile) in routes(for: folder, steam: steam) {
                 let source = folder.appendingPathComponent(sourceProfile, isDirectory: true)
                 guard let ipad = Snapshot.read(source), !ipad.isEmpty else { continue }
+
+                // Never write a half-arrived folder over a campaign. Dropbox puts
+                // every file in place at zero bytes before it downloads any of
+                // them, and a folder of placeholders sits perfectly still.
+                let readiness = Readiness.check(profileDir: source)
+                guard readiness.isReady else {
+                    log("\(name)/\(sourceProfile): not importing — \(readiness.describe)")
+                    if !st.waitingForDownload.contains(name) { st.waitingForDownload.append(name) }
+                    needRetry = true
+                    done = false
+                    continue
+                }
                 let target = steam.appendingPathComponent(profile, isDirectory: true)
                 let mac = Snapshot.read(target)
                 let conflictID = "\(name)/\(sourceProfile)"
@@ -230,6 +260,30 @@ final class SyncEngine {
             defer { st.profiles.append(ps) }
 
             if pendingProfiles.contains(profile) { continue }
+
+            // A save carrying content the iPad cannot load is not published: the
+            // iPad would list the campaign and then crash opening it.
+            ps.issues = Compatibility.check(profileDir: target)
+            ps.preparedForIPad = ledger.preparedForIPad[profile] == mac.digest
+            if ledger.preparedForIPad[profile] != nil, ledger.preparedForIPad[profile] != mac.digest {
+                ledger.preparedForIPad.removeValue(forKey: profile)
+                log("\(ps.estate ?? profile): played since the copy for the iPad was made, so that copy is out of date")
+            }
+            if !ps.issues.isEmpty, !config.publishIncompatible, !ps.preparedForIPad {
+                if mirror?.digest != mac.digest, !warnedIncompatible.contains(profile) {
+                    warnedIncompatible.insert(profile)
+                    let what = ps.issues.map(\.marker).joined(separator: ", ")
+                    log("\(ps.estate ?? profile): not published for the iPad — \(ps.issues[0].explanation) (found: \(what))")
+                    notify("This campaign can't go to the iPad", "\(ps.estate ?? profile): \(ps.issues[0].explanation)")
+                }
+                continue
+            }
+            warnedIncompatible.remove(profile)
+
+            if ps.preparedForIPad {
+                ps.inStep = true
+                continue
+            }
             if mirror?.digest == mac.digest {
                 if ledger.profiles[profile] == nil {
                     ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
@@ -452,6 +506,46 @@ final class SyncEngine {
     /// out of the app folder; a cancelled dialog fails the move). Not retried until
     /// the user asks, so the dialog doesn't come back every half minute.
     private(set) var archiveFailures: [String] = []
+
+    /// Publish Mac saves even when the iPad cannot load them (the user's call).
+    func setPublishIncompatible(_ on: Bool) {
+        queue.async {
+            self.config.publishIncompatible = on
+            self.warnedIncompatible.removeAll()
+            self.tick(reason: on ? "publishing incompatible saves" : "holding incompatible saves")
+        }
+    }
+
+    /// Publishes a cleaned copy of one Mac campaign for the iPad to import.
+    /// Runs only when asked; nothing here happens on its own.
+    func prepareForIPad(profile: String, completion: @escaping (Result<SanitiseReport, Error>) -> Void) {
+        queue.async {
+            guard let steam = self.config.steamRemote, let dropbox = self.config.dropboxFolder else {
+                completion(.failure(SaveFile.Failure.notASave)); return
+            }
+            let source = steam.appendingPathComponent(profile, isDirectory: true)
+            guard let snap = Snapshot.read(source), !snap.isEmpty else {
+                completion(.failure(SaveFile.Failure.notASave)); return
+            }
+            do {
+                let report = try Sanitise.copy(profile: profile, from: source,
+                                               to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
+                                               clearAddOnList: self.config.clearAddOnList)
+                self.ledger.preparedForIPad[profile] = snap.digest
+                self.ledger.profiles[profile] = ProfileRecord(syncedDigest: snap.digest,
+                                                              syncedSaveTime: saveTime(of: source, snapshot: snap),
+                                                              syncedAt: self.config.now(), lastSource: "mac",
+                                                              cloudState: self.ledger.profiles[profile]?.cloudState ?? "uploaded")
+                self.ledger.save(to: self.ledgerURL)
+                self.log("\(report.estate ?? profile): a copy without \(report.removed.joined(separator: " and ")) is now in Dropbox for the iPad")
+                completion(.success(report))
+                self.tick(reason: "prepared a campaign for the iPad")
+            } catch {
+                self.log("\(profile): could not prepare a copy for the iPad: \(error)")
+                completion(.failure(error))
+            }
+        }
+    }
 
     func retryArchive() {
         queue.async {

@@ -9,7 +9,7 @@ BUILD_DIR="build"
 APP="$BUILD_DIR/$APP_NAME.app"
 SDK="$(xcrun --show-sdk-path)"
 TARGET="$(uname -m)-apple-macos15.0"
-ENGINE="Sources/Stagecoach/CampaignInfo.swift Sources/Stagecoach/SteamCache.swift Sources/Stagecoach/Paths.swift Sources/Stagecoach/Snapshot.swift Sources/Stagecoach/Ledger.swift Sources/Stagecoach/SyncEngine.swift Sources/Stagecoach/SteamCloud.swift Sources/Stagecoach/Processes.swift Sources/Stagecoach/Watcher.swift"
+ENGINE="Sources/Stagecoach/Readiness.swift Sources/Stagecoach/SaveFile.swift Sources/Stagecoach/Sanitise.swift Sources/Stagecoach/Compatibility.swift Sources/Stagecoach/CampaignInfo.swift Sources/Stagecoach/SteamCache.swift Sources/Stagecoach/Paths.swift Sources/Stagecoach/Snapshot.swift Sources/Stagecoach/Ledger.swift Sources/Stagecoach/SyncEngine.swift Sources/Stagecoach/SteamCloud.swift Sources/Stagecoach/Processes.swift Sources/Stagecoach/Watcher.swift"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

@@ -5,6 +5,9 @@
 //   stagecoach-cli steam-check        open a Steam session as Darkest Dungeon and list cloud files
 //   stagecoach-cli steam-write-test   read steam_init.json from the cloud and write it back unchanged
 //   stagecoach-cli sync               run one sync pass with the real folders and ledger
+//   stagecoach-cli codec-check <dir>  read and rewrite every save under a folder, byte for byte
+//   stagecoach-cli prepare <profile_N> [--without-add-ons]
+//                                     publish a copy of a Mac campaign the iPad can open
 //   stagecoach-cli steam-push <profile_N> [folder]
 //                                     write a profile folder into Steam Cloud through the client
 //                                     (default: the Steam side's own copy, i.e. re-push as is)
@@ -105,6 +108,53 @@ case "steam-push":
         print("pushed \(snap.files.count) files; Steam uploads them now")
     } catch { print("failed: \(error)"); exit(1) }
 
+case "codec-check":
+    let root = args.count >= 2 ? URL(fileURLWithPath: args[args.startIndex + 1]) : (Paths.detectSteamRemote() ?? Paths.home)
+    var checked = 0, failed = 0
+    if let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) {
+        for case let url as URL in e where url.pathExtension == "json" {
+            guard let d = try? Data(contentsOf: url), d.count > 4 else { continue }
+            do {
+                let save = try SaveFile(d)
+                checked += 1
+                if save.serialized() != d {
+                    failed += 1
+                    print("  DIFFERS: \(url.path) (\(d.count) -> \(save.serialized().count))")
+                }
+            } catch {
+                checked += 1; failed += 1
+                print("  FAILED:  \(url.path): \(error)")
+            }
+        }
+    }
+    print("\(checked - failed)/\(checked) save files read and rewritten byte for byte")
+    if failed > 0 { exit(1) }
+
+case "prepare":
+    guard args.count >= 2 else { print("usage: stagecoach-cli prepare profile_N [--without-add-ons]"); exit(2) }
+    let profile = args[args.startIndex + 1]
+    let clearAddOns = args.contains("--without-add-ons")
+    guard let steam = Paths.detectSteamRemote(), let dropbox = Paths.detectDropboxAppFolder() else {
+        print("Steam save folder or Dropbox folder not found"); exit(1)
+    }
+    let src = steam.appendingPathComponent(profile, isDirectory: true)
+    guard let snap = Snapshot.read(src), !snap.isEmpty else { print("nothing in \(src.path)"); exit(1) }
+    do {
+        let r = try Sanitise.copy(profile: profile, from: src,
+                                  to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
+                                  clearAddOnList: clearAddOns)
+        var led = Ledger.load()
+        led.preparedForIPad[profile] = snap.digest
+        led.profiles[profile] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),
+                                              syncedAt: Date(), lastSource: "mac",
+                                              cloudState: led.profiles[profile]?.cloudState ?? "uploaded")
+        led.save()
+        print("prepared \(r.estate ?? profile) for the iPad")
+        for x in r.removed { print("  removed: \(x)") }
+        for x in r.leftAlone { print("  left in: \(x)") }
+        print("  files rewritten: \(r.changedFiles.joined(separator: ", "))")
+    } catch { print("failed: \(error)"); exit(1) }
+
 case "sync":
     let dropbox = Paths.detectDropboxAppFolder()
     let root = dropbox?.deletingLastPathComponent().deletingLastPathComponent()
@@ -127,6 +177,6 @@ case "sync":
     if let e = st.lastError { print("error: \(e)") }
 
 default:
-    print("usage: stagecoach-cli scan | steam-check | steam-write-test | steam-push profile_N [folder] | sync")
+    print("usage: stagecoach-cli scan | steam-check | steam-write-test | steam-push profile_N [folder] | codec-check [dir] | prepare profile_N | sync")
     exit(2)
 }

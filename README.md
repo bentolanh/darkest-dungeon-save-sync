@@ -45,7 +45,45 @@ save**. Whichever loses is still in the backups folder.
 On the very first run there is no history yet, so the newer of the two wins
 and the log says which.
 
-What it cannot see: whether you actually ran Import on the iPad before playing
+### Saves the iPad cannot open, and the tool that fixes them
+
+The Mac build has The Butcher's Circus, the free player-versus-player add-on
+that never came to iOS. When it is active the game records a `circus` building
+in the estate's Hamlet, and the iPad — which has no such building — crashes
+opening the campaign. Red Hook's import article warns that saves carrying
+content the iPad lacks "may result in errors"; this is that.
+
+Nothing is wrong with the copying. The bytes reach Dropbox intact. It is the
+content the iPad cannot read.
+
+So a Mac save is checked before it is published, and held back if it carries
+that content, with the campaign named and the reason given. The panel then
+offers **Prepare a copy for the iPad**. Press it and Stagecoach publishes a
+copy with two things taken out:
+
+- the Circus building in the Hamlet, and
+- the note that the game once advertised the Butcher's Circus to you.
+
+Everything else is carried through byte for byte, the campaign's own add-ons
+included — Crimson Court, Shieldbreaker, Colour of Madness are all sold for the
+iPad and stay switched on. The Steam save is never touched; it keeps its
+Circus. Nothing is published unless the finished copy reads back as the same
+save and no longer carries anything known to crash the iPad.
+
+The button is yours to press. It never runs on its own, because it produces a
+save that is deliberately not what the Mac holds.
+
+**Better still, don't enable it.** In Steam, right-click Darkest Dungeon →
+Properties → DLC and uncheck The Butcher's Circus. Campaigns you play after
+that stop recording the Circus, and travel to the iPad with no preparation at
+all. You lose only the player-versus-player mode, which the iPad never had.
+
+One thing preparing cannot change: which add-ons a campaign uses is fixed when
+the campaign is created and cannot be switched off afterwards, on any platform.
+That is the game's own rule, not the Butcher's Circus, and it is why an
+imported campaign shows its add-ons locked on the iPad.
+
+What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
 there. If you export from the iPad without having imported the latest Mac
 save, the Mac's progress is replaced (and backed up), the same as it would be
 by hand. Also, merely opening a campaign on the Mac rewrites a few save files,
@@ -71,6 +109,8 @@ stagecoach-cli scan                          detected folders, each side's state
 stagecoach-cli steam-check                   open a Steam session as Darkest Dungeon, list cloud files
 stagecoach-cli steam-write-test              read steam_init.json from the cloud, write it back unchanged
 stagecoach-cli steam-push profile_N [dir]    write a profile folder to Steam Cloud through the client
+stagecoach-cli codec-check [dir]             read and rewrite every save under a folder, byte for byte
+stagecoach-cli prepare profile_N             publish a copy of a Mac campaign the iPad can open
 stagecoach-cli sync                          one sync pass with the real folders
 ```
 

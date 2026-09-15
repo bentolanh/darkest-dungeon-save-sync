@@ -27,33 +27,67 @@ func write(_ dir: URL, _ name: String, _ text: String, at date: Date) {
     try! fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
 }
 func read(_ dir: URL, _ name: String) -> String? {
-    (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { String(data: $0, encoding: .utf8) }
+    guard let d = try? Data(contentsOf: dir.appendingPathComponent(name)) else { return nil }
+    if let s = try? SaveFile(d), let f = s.fields.first(where: { $0.name == "mark" }) {
+        let v = f.value
+        guard v.count > 4 else { return nil }
+        return String(bytes: v[4..<(v.count - 1)], encoding: .utf8)
+    }
+    return String(data: d, encoding: .utf8)
 }
 /// A persist.game.json in the game's binary layout, enough for the fields we read.
 func gameFile(estate: String, savedAt: String, salt: String = "") -> Data {
-    var d = Data([0x01, 0xB1, 0, 0, 0, 0, 0, 0])
+    var body = Data()
     func field(_ name: String, _ value: String) {
-        d.append(contentsOf: Array((name + "\0").utf8))
-        while d.count % 4 != 0 { d.append(0) }
+        body.append(contentsOf: Array((name + "\0").utf8))
+        while body.count % 4 != 0 { body.append(0) }
         let v = Array((value + "\0").utf8)
-        d.append(contentsOf: [UInt8(v.count & 0xff), UInt8((v.count >> 8) & 0xff), 0, 0])
-        d.append(contentsOf: v)
+        body.append(contentsOf: [UInt8(v.count & 0xff), UInt8((v.count >> 8) & 0xff), 0, 0])
+        body.append(contentsOf: v)
     }
     field("estatename", estate); field("date_time", savedAt); field("salt", salt)
-    return d
+    // A valid, empty save header, with the fields carried in the data section so
+    // CampaignInfo's byte scan finds them just as it does in a real file.
+    var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
+    func put(_ o: Int, _ v: Int) { h[o] = UInt8(v & 0xff); h[o+1] = UInt8((v >> 8) & 0xff) }
+    put(8, 64); put(24, 64); put(48, 64); put(56, body.count); put(60, 64)
+    return Data(h) + body
 }
 func makeCampaign(_ dir: URL, estate: String, savedAt: String, roster: String, at date: Date) {
     try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent("persist.game.json")
     try! gameFile(estate: estate, savedAt: savedAt, salt: roster).write(to: url)
     try! fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
-    write(dir, "persist.roster.json", roster, at: date)
+    writeSave(dir, "persist.roster.json", roster, at: date)
 }
 func estateOf(_ dir: URL) -> String? { CampaignInfo.read(profileDir: dir).estate }
 
+/// A minimal but genuine save file carrying one marker string, so folders in
+/// these tests look to the app exactly as the game's own folders do.
+func saveBytes(_ marker: String) -> Data {
+    func p32(_ v: Int) -> [UInt8] { [UInt8(v & 0xff), UInt8((v >> 8) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)] }
+    let name = "mark"
+    var value = p32(marker.utf8.count + 1)
+    value += Array(marker.utf8); value.append(0)
+    let data = Array(name.utf8) + [0] + value
+    let fieldTable = p32(0) + p32(0) + p32(((name.utf8.count + 1) & 0x1FF) << 2)   // one plain field
+    var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
+    func put(_ o: Int, _ v: Int) { let b = p32(v); h[o] = b[0]; h[o+1] = b[1]; h[o+2] = b[2]; h[o+3] = b[3] }
+    put(8, 64); put(16, 0); put(20, 0); put(24, 64)
+    put(44, 1); put(48, 64); put(56, data.count); put(60, 64 + fieldTable.count)
+    return Data(h + fieldTable + data)
+}
+
+func writeSave(_ dir: URL, _ name: String, _ marker: String, at date: Date) {
+    try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent(name)
+    try! saveBytes(marker).write(to: url)
+    try! fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+}
+
 func makeProfile(_ dir: URL, game: String, roster: String, at date: Date) {
-    write(dir, "persist.game.json", game, at: date)
-    write(dir, "persist.roster.json", roster, at: date)
+    writeSave(dir, "persist.game.json", game, at: date)
+    writeSave(dir, "persist.roster.json", roster, at: date)
 }
 
 var config = SyncConfig(steamRemote: steam, dropboxFolder: dropbox, archiveFolder: archive, backupsFolder: backups, steamworksLibrary: nil)
@@ -218,6 +252,182 @@ settle()
 check(engine.status.conflicts.count == 1 && engine.status.conflicts[0].estate == "Sal", "older Sal export flagged as a conflict by in-game save time")
 engine.resolve(conflict: engine.status.conflicts[0].id, keep: "mac"); Thread.sleep(forTimeInterval: 0.5); tick()
 check(read(sal, "persist.roster.json") == "s2-ipad", "Mac's Sal kept")
+
+print("7c. A Mac save the iPad cannot load is held back, not published")
+clock += 600
+// Give Sal a town file carrying the Butcher's Circus building, as the Mac writes it.
+let salTown = sal.appendingPathComponent("persist.town.json")
+writeSave(sal, "persist.town.json", "circus", at: clock - 100)
+makeCampaign(sal, estate: "Sal", savedAt: "2026-09-17 10:00:00", roster: "s3-mac", at: clock - 100)
+let mirrorBefore = read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json")
+clock += 10; tick()
+check(Compatibility.check(profileDir: sal).map(\.marker) == ["circus"], "the circus building is detected")
+check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == mirrorBefore, "the crashing save was not published to Dropbox")
+check(engine.status.heldBack.map(\.estate) == ["Sal"], "it is reported as held back")
+check(engine.status.profiles.first(where: { $0.profile == "profile_1" })?.issues.isEmpty == false, "the slot carries the reason")
+// Darkest has no circus data and still flows.
+check(read(dropbox.appendingPathComponent("profile_0"), "persist.roster.json") == "d1", "a clean campaign still reaches Dropbox")
+// The user can override.
+engine.setPublishIncompatible(true); Thread.sleep(forTimeInterval: 0.5); clock += 10; tick()
+check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == "s3-mac", "publishing anyway is possible when asked for")
+check(engine.status.heldBack.isEmpty, "nothing reported as held back once overridden")
+engine.setPublishIncompatible(false); Thread.sleep(forTimeInterval: 0.5)
+
+print("7d. The save-file codec reads and rewrites real saves byte for byte")
+// A save built the way the game builds one: header, object table, field table, data.
+func dsonFile(objects: [(parent: Int, nameField: Int, direct: Int, all: Int)],
+              fields: [(name: String, isObject: Bool, object: Int, value: [UInt8])]) -> Data {
+    func p32(_ v: Int) -> [UInt8] { [UInt8(v & 0xff), UInt8((v >> 8) & 0xff), UInt8((v >> 16) & 0xff), UInt8((v >> 24) & 0xff)] }
+    var data: [UInt8] = [], offs: [Int] = []
+    for f in fields { offs.append(data.count); data += Array(f.name.utf8); data.append(0); data += f.value }
+    var ot: [UInt8] = []; for o in objects { ot += p32(o.parent) + p32(o.nameField) + p32(o.direct) + p32(o.all) }
+    var ft: [UInt8] = []
+    for (f, off) in zip(fields, offs) {
+        ft += p32(0) + p32(off) + p32((f.object << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0))
+    }
+    var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
+    func put(_ o: Int, _ v: Int) { let p = p32(v); h[o] = p[0]; h[o+1] = p[1]; h[o+2] = p[2]; h[o+3] = p[3] }
+    put(8, 64); put(16, ot.count); put(20, objects.count); put(24, 64)
+    put(44, fields.count); put(48, 64 + ot.count); put(56, data.count); put(60, 64 + ot.count + ft.count)
+    return Data(h + ot + ft + data)
+}
+// root { buildings { abbey, circus }, tavern }
+let town = dsonFile(
+    objects: [(0, 0, 2, 4), (0, 1, 2, 2), (1, 2, 0, 0), (1, 3, 0, 0)],
+    fields: [("base_root", true, 0, []), ("buildings", true, 1, []),
+             ("abbey", true, 2, []), ("circus", true, 3, []),
+             ("tavern", false, 0, [3, 0, 0, 0])])
+var parsed = try! SaveFile(town)
+check(parsed.serialized() == town, "a save is rewritten byte for byte when nothing changes")
+check(parsed.indexOfObject(named: "circus") != nil, "the circus object is found")
+check(parsed.indexOfObject(named: "circus", under: "buildings") != nil, "and found by its place in the Hamlet")
+check(parsed.indexOfObject(named: "circus", under: "base_root") == nil, "but not under the wrong parent")
+check(parsed.removeObject(named: "circus", under: "buildings"), "the circus object is removed")
+let cleaned = parsed.serialized()
+let reparsed = try! SaveFile(cleaned)
+check(reparsed.serialized() == cleaned, "the rewritten save parses and rewrites stably")
+check(reparsed.indexOfObject(named: "circus") == nil, "the circus is gone")
+check(reparsed.fields.map(\.name) == ["base_root", "buildings", "abbey", "tavern"], "every other field survives in order")
+check(reparsed.fields.first(where: { $0.name == "tavern" })?.value == [3, 0, 0, 0], "values are carried through untouched")
+check(!reparsed.mentions("circus"), "no trace of the name is left in the bytes")
+check(reparsed.objects.count == 3 && reparsed.objects[1].direct == 1 && reparsed.objects[1].all == 1,
+      "the Hamlet's child counts are corrected")
+check(reparsed.objects[0].all == 3, "and so are the totals above it")
+check(reparsed.children(of: "buildings") == ["abbey"], "the remaining buildings still read back")
+// Two objects sharing a name, as a real save has for "dlc": only the one in the
+// named place comes out.
+let twins = dsonFile(
+    objects: [(0, 0, 2, 4), (0, 1, 1, 1), (1, 2, 0, 0), (0, 3, 1, 1), (3, 4, 0, 0)],
+    fields: [("base_root", true, 0, []), ("shown", true, 1, []), ("dlc", true, 2, []),
+             ("kept", true, 3, []), ("dlc", true, 4, [])])
+var tw = try! SaveFile(twins)
+check(tw.serialized() == twins, "the two-of-a-name save round-trips")
+check(tw.removeObject(named: "dlc", under: "shown"), "the one under 'shown' is removed")
+let twOut = tw.serialized(); let twBack = try! SaveFile(twOut)
+check(twBack.indexOfObject(named: "dlc", under: "shown") == nil, "it is gone")
+check(twBack.indexOfObject(named: "dlc", under: "kept") != nil, "the other one is untouched")
+check(twBack.serialized() == twOut, "and the result is stable")
+
+var damaged = try! SaveFile(town); damaged.objects[3].all = 99
+check(damaged.removeObject(named: "circus") == false, "a save whose tables disagree is refused, not half-edited")
+var untouched = try! SaveFile(town)
+check(untouched.removeObject(named: "nonesuch") == false, "removing something absent changes nothing")
+check(untouched.serialized() == town, "and leaves the file exactly as it was")
+
+print("7e. Preparing a campaign for the iPad publishes a cleaned copy")
+clock += 600
+let prepSrc = steam.appendingPathComponent("profile_1")
+try! town.write(to: prepSrc.appendingPathComponent("persist.town.json"))
+makeCampaign(prepSrc, estate: "Sal", savedAt: "2026-09-18 12:00:00", roster: "s4-mac", at: clock - 100)
+clock += 10; tick()
+check(engine.status.heldBack.map(\.estate) == ["Sal"], "held back before preparing")
+var prepared: SanitiseReport?
+engine.prepareForIPad(profile: "profile_1") {
+    switch $0 {
+    case .success(let r): prepared = r
+    case .failure(let e): print("       prepare failed: \(e)")
+    }
+}
+Thread.sleep(forTimeInterval: 1.0)
+check(prepared?.removed.isEmpty == false, "the report says what was taken out")
+let published = dropbox.appendingPathComponent("profile_1")
+check(read(published, "persist.roster.json") == "s4-mac", "the rest of the campaign is published")
+func hasCircus(_ url: URL) -> Bool? {
+    guard let d = try? Data(contentsOf: url) else { print("       no file at \(url.lastPathComponent)"); return nil }
+    guard let s = try? SaveFile(d) else { print("       \(url.path) is not a save (\(d.count) bytes, first: \(Array(d.prefix(8))))"); return nil }
+    return s.indexOfObject(named: "circus") != nil
+}
+check(hasCircus(published.appendingPathComponent("persist.town.json")) == false, "the published town has no Circus")
+check(hasCircus(prepSrc.appendingPathComponent("persist.town.json")) == true, "the Steam save still has its Circus")
+clock += 10; tick()
+check(hasCircus(published.appendingPathComponent("persist.town.json")) == false,
+      "a later sync does not overwrite the cleaned copy with the raw save")
+check(engine.status.heldBack.isEmpty, "no longer reported as held back")
+// Surviving a restart, and going stale when the Mac is played again.
+let engine3 = SyncEngine(config: config, ledgerURL: ledgerURL)
+engine3.log = { _ in }
+engine3.syncNow(reason: "restart")
+check(engine3.status.heldBack.isEmpty, "a prepared copy is still recognised after a restart")
+check(hasCircus(published.appendingPathComponent("persist.town.json")) == false, "and is not overwritten by the restart")
+clock += 600
+makeCampaign(prepSrc, estate: "Sal", savedAt: "2026-09-19 09:00:00", roster: "s5-mac", at: clock - 100)
+clock += 10; tick()
+check(engine.status.heldBack.map(\.estate) == ["Sal"], "playing on the Mac again flags the campaign once more")
+
+print("7f. Clearing the campaign's add-on list touches only that list")
+// Two objects named "dlc": the adverts shown, and the campaign's own add-ons.
+let gameLike = dsonFile(
+    objects: [(0, 0, 2, 4), (0, 1, 1, 1), (1, 2, 0, 0), (0, 3, 1, 1), (3, 4, 0, 0)],
+    fields: [("base_root", true, 0, []), ("presented_dlc", true, 1, []), ("dlc", true, 2, []),
+             ("keep_me", true, 3, []), ("dlc", true, 4, [])])
+var g = try! SaveFile(gameLike)
+check(g.removeObject(named: "dlc", under: "presented_dlc"), "the advert list comes out")
+let g1 = g.serialized(); let gb = try! SaveFile(g1)
+check(gb.indexOfObject(named: "dlc", under: "keep_me") != nil, "the campaign's own list stays by default")
+var g2 = gb
+check(g2.removeObject(named: "dlc", under: "keep_me"), "and comes out only when asked")
+let g3 = g2.serialized(); let gc = try! SaveFile(g3)
+check(gc.serialized() == g3 && gc.fields.map(\.name) == ["base_root", "presented_dlc", "keep_me"],
+      "leaving a stable save with both lists gone and nothing else disturbed")
+
+print("7g. A folder Dropbox has not finished downloading is never imported")
+clock += 600
+// The state to protect, and a copy of it to compare against afterwards.
+makeCampaign(sal, estate: "Sal", savedAt: "2026-09-20 10:00:00", roster: "precious-mac", at: clock - 200)
+writeSave(sal, "persist.town.json", "plain", at: clock - 200)
+clock += 20; tick()
+let guardExport = dropbox.appendingPathComponent("20260920_100000_upload/profile_1")
+try! fm.createDirectory(at: guardExport, withIntermediateDirectories: true)
+// Exactly what Dropbox leaves behind before it downloads anything.
+for n in ["persist.game.json", "persist.roster.json", "persist.town.json"] {
+    fm.createFile(atPath: guardExport.appendingPathComponent(n).path, contents: Data())
+}
+check(Readiness.check(profileDir: guardExport) == .empty(files: 3), "a folder of placeholders is recognised as not downloaded")
+check(Readiness.check(profileDir: guardExport.appendingPathComponent("nope")) == .nothingThere, "a folder that isn't there is not mistaken for one that is")
+settle(); settle()
+check(read(sal, "persist.roster.json") == "precious-mac", "the Mac campaign is untouched by the empty export")
+check(engine.status.waitingForDownload.contains("20260920_100000_upload"), "it is reported as still downloading")
+check(fm.fileExists(atPath: dropbox.appendingPathComponent("20260920_100000_upload").path), "and is not archived as done")
+// Half of it arrives.
+writeSave(guardExport, "persist.game.json", "half", at: clock)
+check(Readiness.check(profileDir: guardExport) != .ready, "a part-downloaded folder is still refused")
+settle()
+check(read(sal, "persist.roster.json") == "precious-mac", "still untouched")
+// A file that arrives as something other than a save is refused too.
+for n in ["persist.roster.json", "persist.town.json"] {
+    try! Data("not a save at all".utf8).write(to: guardExport.appendingPathComponent(n))
+}
+if case .incomplete = Readiness.check(profileDir: guardExport) { check(true, "a file that is not a save is refused") }
+else { check(false, "a file that is not a save is refused") }
+settle()
+check(read(sal, "persist.roster.json") == "precious-mac", "and nothing is written")
+// Now it all arrives properly.
+makeCampaign(guardExport, estate: "Sal", savedAt: "2026-09-20 11:00:00", roster: "ipad-real", at: clock)
+writeSave(guardExport, "persist.town.json", "plain", at: clock)
+check(Readiness.check(profileDir: guardExport) == .ready, "a complete folder is ready")
+settle()
+check(read(sal, "persist.roster.json") == "ipad-real", "and only then is it imported")
+check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260920_100000_upload").path), "and archived")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

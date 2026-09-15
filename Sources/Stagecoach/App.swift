@@ -48,7 +48,7 @@ struct PanelView: View {
             if !model.status.profiles.isEmpty {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
                     GridRow {
-                        Text("Slot").foregroundStyle(.secondary)
+                        Text("Campaign").foregroundStyle(.secondary)
                         Text("Mac saved").foregroundStyle(.secondary)
                         Text("Ready for iPad").foregroundStyle(.secondary)
                         Text("Steam Cloud").foregroundStyle(.secondary)
@@ -63,6 +63,12 @@ struct PanelView: View {
                                 Text(p.inStep ? "in step" : "copying…")
                             }
                             Text(cloudText(p))
+                            if !p.issues.isEmpty || p.preparedForIPad {
+                                Button(model.preparing == p.profile ? "…" : (p.preparedForIPad ? "Redo iPad copy" : "iPad copy")) {
+                                    model.prepareForIPad(p.profile)
+                                }
+                                .buttonStyle(.link).disabled(model.preparing != nil)
+                            }
                         }.font(.callout)
                     }
                 }
@@ -71,6 +77,26 @@ struct PanelView: View {
             if !model.status.waitingForDownload.isEmpty {
                 Label("Waiting for Dropbox to finish downloading \(model.status.waitingForDownload.joined(separator: ", "))", systemImage: "icloud.and.arrow.down")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(model.status.heldBack) { p in
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("\(p.estate ?? p.profile) can't be opened on the iPad", systemImage: "iphone.slash")
+                        .foregroundStyle(.orange).font(.callout.bold())
+                    Text(p.issues.first?.explanation ?? "")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("It is not being published to Dropbox, so the iPad won't list a campaign that crashes it. Saves coming the other way, from the iPad, are unaffected.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button(model.preparing == p.profile ? "Preparing…" : "Prepare a copy for the iPad") {
+                            model.prepareForIPad(p.profile)
+                        }
+                        .disabled(model.preparing != nil)
+                        Text("Makes a copy without the Circus. Your Steam save is untouched.")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
             }
             if !model.status.exportsStuck.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
@@ -113,6 +139,26 @@ struct PanelView: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.frame(height: 140)
             }.font(.caption)
+
+            if let r = model.lastReport {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("\(r.estate ?? r.profile) is ready to import on the iPad", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green).font(.callout.bold())
+                    if !r.removed.isEmpty {
+                        Text("Taken out of the copy: " + r.removed.joined(separator: "; ") + ".")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !r.leftAlone.isEmpty {
+                        Text("Left in: " + r.leftAlone.joined(separator: "; ") + ". If the iPad still crashes, this is the next thing to look at.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("On the iPad: Dropbox icon → Import → pick the campaign → Copy.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Done") { model.lastReport = nil }
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.green.opacity(0.12)))
+            }
 
             HStack {
                 Button("Sync now") { model.syncNow() }
@@ -176,6 +222,14 @@ struct SettingsView: View {
             Section("Behaviour") {
                 Toggle("Push imported saves to Steam Cloud through the Steam client", isOn: $model.cloudPush)
                 Text("Needs Steam running. Otherwise the files are copied in place and Steam Cloud picks them up when the game next launches.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Publish Mac saves the iPad cannot load", isOn: $model.publishIncompatible)
+                Text("Off by default. The Mac has The Butcher's Circus, which never came to iOS; a campaign carrying it crashes the iPad when opened. Leave this off and use “Prepare a copy for the iPad” instead, which publishes a copy with the Circus taken out.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("To avoid the whole problem: in Steam, right-click Darkest Dungeon → Properties → DLC and uncheck The Butcher's Circus. Campaigns played after that need no preparation. You lose only the player-versus-player mode, which the iPad never had.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("When preparing a copy, also clear the campaign's add-on list", isOn: $model.clearAddOnList)
+                Text("The iPad writes no such list — its own copy of a campaign has none, Crimson Court heroes and all. Clearing it makes the copy match what the iPad produces. Turn it on if a prepared copy still won't open.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Move consumed iPad exports out of Apps/DarkestDungeon", isOn: $model.archiveExports)
                 Text("The iPad's Import hangs if an export folder is left there. Moved exports go to Dropbox/Darkest Dungeon Save Sync/Imported exports.")
