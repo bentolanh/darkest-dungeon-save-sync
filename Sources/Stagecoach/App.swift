@@ -55,7 +55,7 @@ struct PanelView: View {
                     }.font(.caption)
                     ForEach(model.status.profiles) { p in
                         GridRow {
-                            Text(slotName(p.profile))
+                            Text(p.estate.map { "\($0) · \(slotName(p.profile))" } ?? slotName(p.profile))
                             Text(p.macNewest.map(Self.date.string) ?? "–")
                             HStack(spacing: 4) {
                                 Image(systemName: p.inStep ? "checkmark.circle.fill" : "clock")
@@ -126,7 +126,7 @@ struct PanelView: View {
     }
 
     func slotName(_ profile: String) -> String {
-        if let n = Int(profile.dropFirst("profile_".count)) { return "Campaign slot \(n + 1)" }
+        if let n = Int(profile.dropFirst("profile_".count)) { return "slot \(n + 1)" }
         return profile
     }
 
@@ -149,7 +149,7 @@ struct ConflictView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Both sides have new progress in \(conflict.profile)", systemImage: "exclamationmark.triangle.fill")
+            Label("Both sides have new progress in \(conflict.estate ?? conflict.profile)", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange).font(.callout.bold())
             Text("The iPad export \(conflict.exportFolder) (saved \(conflict.ipadNewest.map(PanelView.date.string) ?? "?")) and the Mac save (saved \(conflict.macNewest.map(PanelView.date.string) ?? "?")) have both changed since they were last in step. The one you don't keep is backed up.")
                 .font(.caption).foregroundStyle(.secondary)

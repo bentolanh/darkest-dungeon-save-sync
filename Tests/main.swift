@@ -29,6 +29,28 @@ func write(_ dir: URL, _ name: String, _ text: String, at date: Date) {
 func read(_ dir: URL, _ name: String) -> String? {
     (try? Data(contentsOf: dir.appendingPathComponent(name))).flatMap { String(data: $0, encoding: .utf8) }
 }
+/// A persist.game.json in the game's binary layout, enough for the fields we read.
+func gameFile(estate: String, savedAt: String, salt: String = "") -> Data {
+    var d = Data([0x01, 0xB1, 0, 0, 0, 0, 0, 0])
+    func field(_ name: String, _ value: String) {
+        d.append(contentsOf: Array((name + "\0").utf8))
+        while d.count % 4 != 0 { d.append(0) }
+        let v = Array((value + "\0").utf8)
+        d.append(contentsOf: [UInt8(v.count & 0xff), UInt8((v.count >> 8) & 0xff), 0, 0])
+        d.append(contentsOf: v)
+    }
+    field("estatename", estate); field("date_time", savedAt); field("salt", salt)
+    return d
+}
+func makeCampaign(_ dir: URL, estate: String, savedAt: String, roster: String, at date: Date) {
+    try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("persist.game.json")
+    try! gameFile(estate: estate, savedAt: savedAt, salt: roster).write(to: url)
+    try! fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+    write(dir, "persist.roster.json", roster, at: date)
+}
+func estateOf(_ dir: URL) -> String? { CampaignInfo.read(profileDir: dir).estate }
+
 func makeProfile(_ dir: URL, game: String, roster: String, at date: Date) {
     write(dir, "persist.game.json", game, at: date)
     write(dir, "persist.roster.json", roster, at: date)
@@ -159,6 +181,43 @@ makeProfile(steam.appendingPathComponent("profile_0"), game: "slot0", roster: "s
 tick()
 check(read(dropbox.appendingPathComponent("profile_0"), "persist.game.json") == "slot0", "new slot mirrored")
 check(engine.status.profiles.map(\.profile) == ["profile_0", "profile_1"], "both slots reported")
+
+print("7b. Campaigns are matched by estate name, not slot number")
+clock += 600
+check(CampaignInfo.string(after: "estatename", in: gameFile(estate: "Sal", savedAt: "2026-08-24 17:09:07")) == "Sal", "estate name read from the binary layout")
+check(CampaignInfo.string(after: "date_time", in: gameFile(estate: "Sal", savedAt: "2026-08-24 17:09:07")) == "2026-08-24 17:09:07", "save time read from the binary layout")
+let sal = steam.appendingPathComponent("profile_1"), darkest = steam.appendingPathComponent("profile_0")
+try? fm.removeItem(at: sal); try? fm.removeItem(at: darkest)
+makeCampaign(darkest, estate: "Darkest", savedAt: "2026-08-22 15:37:54", roster: "d1", at: clock - 300)
+makeCampaign(sal, estate: "Sal", savedAt: "2026-08-24 17:09:07", roster: "s1", at: clock - 300)
+clock += 10; tick()
+check(estateOf(dropbox.appendingPathComponent("profile_1")) == "Sal", "Sal mirrored to slot 2")
+// The iPad exports every slot: the old copy of Sal in slot 2, a played-on copy in slot 3, Darkest in slot 1.
+clock += 600
+let ex = dropbox.appendingPathComponent("20260916_090000_upload")
+makeCampaign(ex.appendingPathComponent("profile_0"), estate: "Darkest", savedAt: "2026-08-22 15:37:54", roster: "d1", at: clock - 60)
+makeCampaign(ex.appendingPathComponent("profile_1"), estate: "Sal", savedAt: "2026-08-24 17:09:07", roster: "s1", at: clock - 60)
+makeCampaign(ex.appendingPathComponent("profile_2"), estate: "Sal", savedAt: "2026-09-16 08:50:00", roster: "s2-ipad", at: clock - 60)
+settle()
+check(read(sal, "persist.roster.json") == "s2-ipad", "newest Sal copy landed in the Mac's Sal slot")
+check(!fm.fileExists(atPath: steam.appendingPathComponent("profile_2").path), "no extra Steam slot was created")
+check(read(darkest, "persist.roster.json") == "d1", "Darkest untouched (identical)")
+check(engine.status.conflicts.isEmpty, "no conflict")
+check(!fm.fileExists(atPath: ex.path), "export archived")
+// A campaign the Mac has never seen goes to the first free slot.
+clock += 600
+let ex2 = dropbox.appendingPathComponent("20260916_100000_upload")
+makeCampaign(ex2.appendingPathComponent("profile_3"), estate: "Ravenhold", savedAt: "2026-09-16 09:55:00", roster: "r1", at: clock - 60)
+settle()
+check(estateOf(steam.appendingPathComponent("profile_2")) == "Ravenhold", "new estate placed in the first free Steam slot")
+// An export whose Sal is older than what the Mac holds is a conflict, decided by the game's own save time.
+clock += 600
+let ex3 = dropbox.appendingPathComponent("20260916_110000_upload")
+makeCampaign(ex3.appendingPathComponent("profile_1"), estate: "Sal", savedAt: "2026-08-24 17:09:07", roster: "s1", at: clock)
+settle()
+check(engine.status.conflicts.count == 1 && engine.status.conflicts[0].estate == "Sal", "older Sal export flagged as a conflict by in-game save time")
+engine.resolve(conflict: engine.status.conflicts[0].id, keep: "mac"); Thread.sleep(forTimeInterval: 0.5); tick()
+check(read(sal, "persist.roster.json") == "s2-ipad", "Mac's Sal kept")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

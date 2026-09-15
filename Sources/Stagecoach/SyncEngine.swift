@@ -38,6 +38,7 @@ struct SyncConfig {
 struct ProfileStatus: Identifiable, Equatable {
     var id: String { profile }
     var profile: String
+    var estate: String?
     var macNewest: Date?
     var mirrorNewest: Date?
     var inStep: Bool
@@ -125,16 +126,18 @@ final class SyncEngine {
                 break
             }
             var done = true
-            for profile in profileFolders(in: folder) {
-                let source = folder.appendingPathComponent(profile, isDirectory: true)
+            for (sourceProfile, profile) in routes(for: folder, steam: steam) {
+                let source = folder.appendingPathComponent(sourceProfile, isDirectory: true)
                 guard let ipad = Snapshot.read(source), !ipad.isEmpty else { continue }
                 let target = steam.appendingPathComponent(profile, isDirectory: true)
                 let mac = Snapshot.read(target)
-                let conflictID = "\(name)/\(profile)"
+                let conflictID = "\(name)/\(sourceProfile)"
                 let record = ledger.profiles[profile]
+                let estate = CampaignInfo.read(profileDir: source).estate
+                let label = "\(name)/\(sourceProfile)" + (estate.map { " (\($0))" } ?? "") + " → \(profile)"
 
                 if let mac, mac.digest == ipad.digest {
-                    log("\(name)/\(profile): already identical to the Mac save")
+                    log("\(label): already identical to the Mac save")
                     ledger.conflicts.removeAll { $0.id == conflictID }
                     continue
                 }
@@ -143,14 +146,14 @@ final class SyncEngine {
                 // Mac's save changed since the two sides were last in step, or if the
                 // export is older than the save the Mac already held at that point.
                 let macMovedOn: Bool
-                let exportTime = ipad.newestModified ?? .distantPast
+                let exportTime = saveTime(of: source, snapshot: ipad) ?? .distantPast
                 if let mac, !mac.isEmpty {
                     if let record {
                         macMovedOn = mac.digest != record.syncedDigest
                             || exportTime < (record.syncedSaveTime ?? .distantPast)
                     } else {
                         // Never synced before: the newer save is the one to keep.
-                        macMovedOn = (mac.newestModified ?? .distantPast) > exportTime
+                        macMovedOn = (saveTime(of: target, snapshot: mac) ?? .distantPast) > exportTime
                     }
                 } else {
                     macMovedOn = false
@@ -163,15 +166,15 @@ final class SyncEngine {
                     keep = choice
                 } else if record == nil {
                     keep = "mac"
-                    log("\(name)/\(profile): first sync and the Mac save is newer, keeping the Mac save")
-                    notify("Older iPad export set aside", "\(profile): the Mac save is newer than the export \(name), so the Mac save was kept. The export is in the archive.")
+                    log("\(label): first sync and the Mac save is newer, keeping the Mac save")
+                    notify("Older iPad export set aside", "\(estate ?? profile): the Mac save is newer than the export \(name), so the Mac save was kept. The export is in the archive.")
                 } else {
                     if !ledger.conflicts.contains(where: { $0.id == conflictID }) {
-                        let c = Conflict(profile: profile, exportFolder: name, macNewest: mac?.newestModified,
-                                         ipadNewest: ipad.newestModified, detectedAt: config.now())
+                        let c = Conflict(profile: profile, exportFolder: name, estate: estate, macNewest: saveTime(of: target, snapshot: mac),
+                                         ipadNewest: exportTime, detectedAt: config.now(), sourceProfile: sourceProfile)
                         ledger.conflicts.append(c)
-                        log("\(name)/\(profile): both the iPad and the Mac have new progress — waiting for you to choose")
-                        notify("Which save should win?", "\(profile): the iPad export and the Mac save both changed. Open Stagecoach to choose.")
+                        log("\(label): both the iPad and the Mac have new progress — waiting for you to choose")
+                        notify("Which save should win?", "\(estate ?? profile): the iPad export and the Mac save both changed. Open Stagecoach to choose.")
                     }
                     done = false
                     continue
@@ -179,7 +182,7 @@ final class SyncEngine {
 
                 if keep == "ipad" {
                     if gameRunning {
-                        log("\(name)/\(profile): the game is running, will import once it quits")
+                        log("\(label): the game is running, will import once it quits")
                         st.waitingForGameToQuit = true
                         done = false
                         continue
@@ -187,18 +190,18 @@ final class SyncEngine {
                     do {
                         let cloudState = try importToSteam(profile: profile, from: source, snapshot: ipad, target: target, existing: mac)
                         try writeMirror(profile: profile, from: source, snapshot: ipad, dropbox: dropbox)
-                        ledger.profiles[profile] = ProfileRecord(syncedDigest: ipad.digest, syncedSaveTime: Snapshot.read(target)?.newestModified,
+                        ledger.profiles[profile] = ProfileRecord(syncedDigest: ipad.digest, syncedSaveTime: saveTime(of: target, snapshot: Snapshot.read(target)),
                                                                  syncedAt: config.now(), lastSource: "ipad", cloudState: cloudState)
-                        log("\(name)/\(profile): imported into Steam (\(cloudState == "uploaded" ? "pushed to Steam Cloud" : "Steam Cloud will pick it up when the game next launches"))")
-                        notify("iPad save imported", "\(profile) is now on Steam" + (cloudState == "uploaded" ? " and in Steam Cloud." : "; Steam Cloud updates at the next launch."))
+                        log("\(label): imported into Steam (\(cloudState == "uploaded" ? "pushed to Steam Cloud" : "Steam Cloud will pick it up when the game next launches"))")
+                        notify("iPad save imported", "\(estate ?? profile) is now on Steam" + (cloudState == "uploaded" ? " and in Steam Cloud." : "; Steam Cloud updates at the next launch."))
                     } catch {
-                        log("\(name)/\(profile): import failed: \(error)")
+                        log("\(label): import failed: \(error)")
                         st.lastError = "\(profile): \(error)"
                         done = false
                         continue
                     }
                 } else {
-                    log("\(name)/\(profile): keeping the Mac save; the iPad export goes to the archive")
+                    log("\(label): keeping the Mac save; the iPad export goes to the archive")
                 }
                 ledger.conflicts.removeAll { $0.id == conflictID }
                 ledger.resolutions.removeValue(forKey: conflictID)
@@ -215,20 +218,21 @@ final class SyncEngine {
         // A profile with an export still waiting (downloading, or blocked on a choice)
         // is left alone, so the ledger keeps saying what the Mac last agreed on.
         let pendingProfiles = Set(exports.filter { !ledger.processedExports.contains($0) }
-            .flatMap { profileFolders(in: dropbox.appendingPathComponent($0, isDirectory: true)) })
+            .flatMap { routes(for: dropbox.appendingPathComponent($0, isDirectory: true), steam: steam).map(\.target) })
         for profile in profileFolders(in: steam) {
             let target = steam.appendingPathComponent(profile, isDirectory: true)
             guard let mac = Snapshot.read(target), !mac.isEmpty else { continue }
             let mirrorURL = dropbox.appendingPathComponent(profile, isDirectory: true)
             let mirror = Snapshot.read(mirrorURL)
-            var ps = ProfileStatus(profile: profile, macNewest: mac.newestModified, mirrorNewest: mirror?.newestModified,
+            var ps = ProfileStatus(profile: profile, estate: CampaignInfo.read(profileDir: target).estate,
+                                   macNewest: saveTime(of: target, snapshot: mac), mirrorNewest: mirror?.newestModified,
                                    inStep: mirror?.digest == mac.digest, record: ledger.profiles[profile])
             defer { st.profiles.append(ps) }
 
             if pendingProfiles.contains(profile) { continue }
             if mirror?.digest == mac.digest {
                 if ledger.profiles[profile] == nil {
-                    ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: mac.newestModified,
+                    ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
                                                              syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
                     ps.record = ledger.profiles[profile]
                 }
@@ -240,7 +244,7 @@ final class SyncEngine {
             }
             do {
                 try writeMirror(profile: profile, from: target, snapshot: mac, dropbox: dropbox)
-                ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: mac.newestModified,
+                ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
                                                          syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
                 ps.record = ledger.profiles[profile]
                 ps.inStep = true
@@ -261,6 +265,48 @@ final class SyncEngine {
     }
 
     // MARK: - Pieces
+
+    /// Which slot in an export goes to which Steam slot. The iPad puts every
+    /// imported campaign into a free slot and old copies are left behind, so an
+    /// export can hold the same estate several times: the newest copy of each
+    /// estate wins, and it goes to the Steam slot carrying that estate name. An
+    /// estate the Mac doesn't have gets the first free slot; a copy whose name
+    /// can't be read keeps its own slot number.
+    func routes(for export: URL, steam: URL) -> [(source: String, target: String)] {
+        var steamEstates: [String: String] = [:]      // estate → Steam slot
+        for slot in profileFolders(in: steam) {
+            if let e = CampaignInfo.read(profileDir: steam.appendingPathComponent(slot)).estate, steamEstates[e] == nil {
+                steamEstates[e] = slot
+            }
+        }
+        var newestByEstate: [String: (slot: String, time: Date)] = [:]
+        var unnamed: [String] = []
+        for slot in profileFolders(in: export) {
+            let dir = export.appendingPathComponent(slot, isDirectory: true)
+            let info = CampaignInfo.read(profileDir: dir)
+            guard let estate = info.estate else { unnamed.append(slot); continue }
+            let t = info.savedAt ?? Snapshot.read(dir)?.newestModified ?? .distantPast
+            if let have = newestByEstate[estate] {
+                let loser = t > have.time ? have.slot : slot
+                log("\(export.lastPathComponent)/\(loser): older copy of \(estate), skipped")
+            }
+            if newestByEstate[estate] == nil || t > newestByEstate[estate]!.time { newestByEstate[estate] = (slot, t) }
+        }
+        var taken = Set(profileFolders(in: steam))
+        var out: [(String, String)] = []
+        for slot in unnamed { out.append((slot, slot)); taken.insert(slot) }
+        for (estate, entry) in newestByEstate.sorted(by: { $0.value.slot < $1.value.slot }) {
+            if let target = steamEstates[estate] {
+                out.append((entry.slot, target))
+            } else {
+                let free = (0..<9).map { "profile_\($0)" }.first { !taken.contains($0) } ?? entry.slot
+                taken.insert(free)
+                log("\(export.lastPathComponent)/\(entry.slot): \(estate) is new to the Mac, it goes to \(free)")
+                out.append((entry.slot, free))
+            }
+        }
+        return out.sorted { $0.0 < $1.0 }
+    }
 
     /// True once an export folder has looked the same for a whole quiet period —
     /// Dropbox lands its files one at a time.

@@ -13,12 +13,14 @@ struct ProfileRecord: Codable, Equatable {
 }
 
 struct Conflict: Codable, Equatable, Identifiable {
-    var id: String { "\(exportFolder)/\(profile)" }
-    var profile: String
+    var id: String { "\(exportFolder)/\(sourceProfile ?? profile)" }
+    var profile: String            // the Steam slot
     var exportFolder: String
+    var estate: String?
     var macNewest: Date?
     var ipadNewest: Date?
     var detectedAt: Date
+    var sourceProfile: String?     // the slot inside the export folder
 }
 
 struct Ledger: Codable, Equatable {
