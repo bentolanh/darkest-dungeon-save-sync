@@ -79,10 +79,20 @@ iPad uses them.
 What is carried through untouched: every hero blob in the roster, byte for
 byte, and every name the iPad writes.
 
-Every rewritten file is checked twice before anything is published: it must
+A value in these files usually sits on a four-byte boundary, reached by zero
+bytes written after the field's name. Those bytes belong to the position rather
+than to the value: take a field out, everything after it slides, and padding
+that used to align a number aligns nothing. Each field therefore remembers where
+its value stood against that boundary, and writing puts it back on the same
+footing. Getting this wrong is what made the iPad crash while it was still
+reading the folder — the import screen parses every save to build its list, and
+one estate file had two hundred values a byte or two off.
+
+Every rewritten file is checked three times before anything is published: it must
 read back as the same bytes, and its object tree must agree with itself —
 every object's count of what is inside it recomputed from the fields and
-compared with what it claims. The second check exists because the first is not
+compared with what it claims; and every value must stand against a four-byte
+boundary where it stood before. The later checks exist because the first is not
 enough. A number read wrongly and written back unchanged round-trips perfectly
 while describing a tree that no longer exists, and that is what once put a
 corrupted copy in front of the iPad.

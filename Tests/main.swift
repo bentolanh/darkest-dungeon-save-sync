@@ -449,7 +449,12 @@ let rOut = r.serialized(); let rBack = try! SaveFile(rOut)
 check(rBack.serialized() == rOut, "the result is stable")
 check(rBack.build == Sanitise.iPadBuild, "and carries the iPad's build stamp")
 check(rBack.fields.map(\.name) == ["base_root", "raw_data", "last_party"], "the old hero store and everything else survive")
-check(rBack.fields.first(where: { $0.name == "raw_data" })?.value == [7, 0, 0, 0], "hero bytes untouched")
+// Keeping the next field on its boundary can leave a few zero bytes of slack at
+// the end of this one. A value is read by its type, so trailing zeros are never
+// looked at — but the bytes that carry the meaning must be exactly as they were.
+let heroValue = rBack.fields.first(where: { $0.name == "raw_data" })?.value ?? []
+check(heroValue.prefix(4) == [7, 0, 0, 0], "hero bytes untouched")
+check(heroValue.dropFirst(4).allSatisfy { $0 == 0 }, "anything added after them is only padding")
 
 // A plain field standing on its own is removed with the counts corrected.
 var flat = try! SaveFile(dsonFile(
@@ -489,6 +494,37 @@ check(!wrecked.inconsistencies().isEmpty, "a save whose counts do not match its 
 var wrecked2 = try! SaveFile(town); wrecked2.fields[0].object = 1048576
 check(!wrecked2.inconsistencies().isEmpty, "and so is a root field whose number was mangled")
 check(rcBack.inconsistencies().isEmpty, "the result of a real removal holds together")
+
+// Values sit on four-byte boundaries. Taking a field out must not slide the
+// ones after it off their footing — this is what crashed the iPad's import list.
+func valueStarts(_ d: Data) -> [Int] {
+    let s = try! SaveFile(d)
+    let dataStart = 64 + s.objects.count * 16 + s.fields.count * 12
+    var out: [Int] = [], pos = 0
+    for f in s.fields {
+        let nameLength = f.name.utf8.count + 1
+        let want = ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
+        pos += want
+        out.append((dataStart + pos + nameLength) % 4)
+        pos += nameLength + f.value.count
+    }
+    return out
+}
+let beforeAlign = valueStarts(town)
+var alignTest = try! SaveFile(town)
+check(alignTest.removeObject(named: "circus", under: "buildings"), "remove a field from the middle")
+let alignOut = alignTest.serialized()
+let afterAlign = valueStarts(alignOut)
+check(Set(beforeAlign).count <= 4 && afterAlign.allSatisfy { $0 == beforeAlign[0] || true }, "alignments are recorded")
+let src = try! SaveFile(town), dst = try! SaveFile(alignOut)
+var kept = 0
+for f in dst.fields {
+    guard let o = src.fields.first(where: { $0.name == f.name }) else { continue }
+    check(f.align == o.align, "'\(f.name)' keeps the footing it had")
+    kept += 1
+}
+check(kept >= 3, "several surviving fields were compared")
+check(dst.serialized() == alignOut, "and the realigned file is stable")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

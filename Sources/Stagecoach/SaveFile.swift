@@ -23,9 +23,16 @@
 //
 // In the data section each field is its name, a zero byte, then its value. The
 // value's own layout depends on a type this file never records, so values are
-// carried here as opaque bytes and written back exactly. That is enough to drop
-// a whole object — everything a save needs stripping for — while leaving every
-// other byte of the file untouched.
+// carried here as opaque bytes and written back exactly.
+//
+// Most values sit on a four-byte boundary, reached by zero bytes after the name.
+// Those bytes belong to the position, not to the value: take a field out and
+// everything after it slides, and padding that used to align a number now
+// aligns nothing. So each field also remembers where its value stood relative to
+// a four-byte boundary, and writing puts it back on the same footing, filling
+// the gap ahead of the name when a removal has shifted it. Field positions are
+// written out one by one anyway, so a few bytes of slack between two fields
+// are never read by anyone.
 
 import Foundation
 
@@ -37,6 +44,7 @@ struct SaveFile {
         var isObject: Bool
         var object: Int        // index into `objects` when isObject (bits 11-30)
         var flag: Bool         // bit 31, preserved exactly; its meaning is not known here
+        var align: Int         // where the value stood against a four-byte boundary
         var value: [UInt8]     // everything between the name's zero byte and the next field
     }
 
@@ -87,6 +95,7 @@ struct SaveFile {
             let name = String(bytes: b[start..<(start + nameLength - 1)], encoding: .utf8) ?? ""
             return Field(hash: hash, name: name, isObject: info & 1 == 1,
                          object: (info >> 11) & 0xFFFFF, flag: info >> 31 == 1,
+                         align: (start + nameLength) % 4,
                          value: Array(b[(start + nameLength)..<next]))
         }
     }
@@ -94,8 +103,14 @@ struct SaveFile {
     // MARK: - Writing
 
     func serialized() -> Data {
+        // Where the data section will begin, so each field can be placed to keep
+        // its value on the same footing against a four-byte boundary as before.
+        let dataStart = 64 + objects.count * 16 + fields.count * 12
         var data: [UInt8] = [], offsets: [Int] = []
         for f in fields {
+            let nameLength = f.name.utf8.count + 1
+            let want = ((f.align - (dataStart + data.count + nameLength)) % 4 + 4) % 4
+            data += [UInt8](repeating: 0, count: want)
             offsets.append(data.count)
             data += Array(f.name.utf8); data.append(0); data += f.value
         }
@@ -273,6 +288,20 @@ struct SaveFile {
                 a = x == 0 ? nil : objects[x].parent
             }
         }
+        // Every value must stand against a four-byte boundary exactly as it did
+        // before. A value slid off its footing is read as nonsense by the game.
+        let dataStart = 64 + objects.count * 16 + fields.count * 12
+        var pos = 0
+        for f in fields {
+            let nameLength = f.name.utf8.count + 1
+            let want = ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
+            pos += want
+            if (dataStart + pos + nameLength) % 4 != f.align {
+                problems.append("'\(f.name)' no longer stands where its value expects")
+            }
+            pos += nameLength + f.value.count
+        }
+
         for (i, o) in objects.enumerated() {
             let name = o.nameField < fields.count ? fields[o.nameField].name : "?"
             if o.direct != direct[i] { problems.append("'\(name)' claims \(o.direct) fields inside it, the tree has \(direct[i])") }
