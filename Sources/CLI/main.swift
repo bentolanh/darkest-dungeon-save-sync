@@ -164,6 +164,24 @@ case "prepare":
         print("  files rewritten: \(r.changedFiles.isEmpty ? "none" : r.changedFiles.joined(separator: ", "))")
     } catch { print("failed: \(error)"); exit(1) }
 
+case "steam-forget":
+    // Removes a campaign from Steam Cloud as well as from disk. Deleting the
+    // files alone is not enough: the client holds its own copy and puts them
+    // back at the next launch.
+    guard args.count >= 2 else { print("usage: stagecoach-cli steam-forget profile_N"); exit(2) }
+    let slot = args[args.startIndex + 1]
+    guard let lib = Paths.detectSteamworksLibrary() else { print("no libsteam_api.dylib found"); exit(1) }
+    guard !Processes.gameIsRunning else { print("Darkest Dungeon is running; quit it first"); exit(1) }
+    do {
+        let session = try SteamCloudSession(library: lib)
+        let names = session.list().map(\.name).filter { $0.hasPrefix(slot + "/") }
+        var gone = 0
+        for name in names where session.delete(name) { gone += 1 }
+        session.close()
+        SteamCloudSession.nudge(library: lib)
+        print("\(slot): removed \(gone) of \(names.count) files from Steam Cloud")
+    } catch { print("failed: \(error)"); exit(1) }
+
 case "rename":
     // Renames the estate in a campaign folder, in place. Several copies of one
     // campaign are indistinguishable in the import list otherwise.
