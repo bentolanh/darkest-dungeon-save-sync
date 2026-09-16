@@ -35,10 +35,19 @@ struct PanelView: View {
                 SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.borderless)
             }
 
-            if model.steamRemote == nil || model.dropboxFolder == nil {
-                Label(model.steamRemote == nil ? "Steam's Darkest Dungeon save folder wasn't found." : "The Dropbox Apps/DarkestDungeon folder wasn't found.",
-                      systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
-                Text("Choose the folders in Settings.").font(.caption).foregroundStyle(.secondary)
+            // Both folders are found without being told. When one is missing it is
+            // almost never the wrong path — it is that the thing which creates it
+            // has not run yet, so say that rather than sending anyone to Settings.
+            if model.steamRemote == nil {
+                Label("Darkest Dungeon has no saves on this Mac yet", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text("Steam keeps them once the game has been played and signed in. If the game is installed elsewhere and you know the folder, it can be set in Settings.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if model.dropboxFolder == nil {
+                Label("Dropbox has no Apps/DarkestDungeon folder yet", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text("The iPad makes it the first time you use Dropbox there: tap the Dropbox icon on the main menu, choose Import, sign in, then close the dialogue. The folder will appear and this will find it on its own.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             ForEach(model.status.profiles.filter { !$0.missingAddOns.isEmpty }) { p in
@@ -176,6 +185,8 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section("Folders") {
+                Text("All three are found on their own. Set one only if yours is somewhere unusual.")
+                    .font(.caption).foregroundStyle(.secondary)
                 FolderRow(title: "Steam save folder", url: model.steamRemote, key: "steamRemote", hint: "Steam/userdata/<id>/262060/remote")
                 FolderRow(title: "Dropbox folder", url: model.dropboxFolder, key: "dropboxFolder", hint: "Dropbox/Apps/DarkestDungeon")
                 FolderRow(title: "Steamworks library", url: model.steamworksLibrary, key: "steamworksLibrary", hint: "libsteam_api.dylib, borrowed from an installed Steam game", pickFile: true)
