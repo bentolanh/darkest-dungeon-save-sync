@@ -253,7 +253,7 @@ check(engine.status.conflicts.count == 1 && engine.status.conflicts[0].estate ==
 engine.resolve(conflict: engine.status.conflicts[0].id, keep: "mac"); Thread.sleep(forTimeInterval: 0.5); tick()
 check(read(sal, "persist.roster.json") == "s2-ipad", "Mac's Sal kept")
 
-print("7c. A Mac save the iPad cannot load is held back, not published")
+print("7c. A campaign carrying the Butcher's Circus is still held back")
 clock += 600
 // Give Sal a town file carrying the Butcher's Circus building, as the Mac writes it.
 let salTown = sal.appendingPathComponent("persist.town.json")
@@ -262,7 +262,7 @@ makeCampaign(sal, estate: "Sal", savedAt: "2026-09-17 10:00:00", roster: "s3-mac
 let mirrorBefore = read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json")
 clock += 10; tick()
 check(Compatibility.check(profileDir: sal).map(\.marker) == ["circus"], "the circus building is detected")
-check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == mirrorBefore, "the crashing save was not published to Dropbox")
+check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == mirrorBefore, "and it is not published unprepared")
 check(engine.status.heldBack.map(\.estate) == ["Sal"], "it is reported as held back")
 check(engine.status.profiles.first(where: { $0.profile == "profile_1" })?.issues.isEmpty == false, "the slot carries the reason")
 // Darkest has no circus data and still flows.
@@ -580,6 +580,75 @@ check((try! SaveFile(padOut)).inconsistencies().isEmpty, "the result passes its 
 var padTest2 = try! SaveFile(town)
 check(padTest2.removeObject(named: "circus", under: "buildings"), "remove an object from the Hamlet")
 check(objectsWithBytes(padTest2.serialized()) == 0, "still none")
+
+// The estate's purse: add-on currencies come out, the game's own stay, and what
+// remains is renumbered. Matching is on the currency, not a mention of the word.
+func purse(_ entries: [(String, String)]) -> Data {
+    var objs: [(Int, Int, Int, Int)] = [(0, 0, 1, 1 + entries.count * 2)]
+    var flds: [(String, Bool, Int, [UInt8])] = [("base_root", true, 0, []), ("wallet", true, 1, [])]
+    objs.append((0, 1, entries.count, entries.count * 2))
+    for e in entries {
+        objs.append((1, flds.count, 1, 1))
+        flds.append((e.0, true, objs.count - 1, []))
+        flds.append(("type", false, 0, []))
+    }
+    // Lay it out once to learn where each value lands, then write the strings with
+    // the padding that footing calls for, exactly as the game's own files carry it.
+    var save = try! SaveFile(dsonFile(objects: objs, fields: flds))
+    var next = 0
+    for i in save.fields.indices where save.fields[i].name == "type" {
+        let text = entries[next].1; next += 1
+        let pad = (4 - save.fields[i].align) % 4
+        var v = [UInt8](repeating: 0, count: pad)
+        let n = text.utf8.count + 1
+        v += [UInt8(n & 0xff), 0, 0, 0] + Array(text.utf8) + [0]
+        save.fields[i].value = v
+    }
+    return save.serialized()
+}
+var wal = try! SaveFile(purse([("0", "gold"), ("1", "shard"), ("2", "crest"), ("3", "blueprint")]))
+let gone = Sanitise.removeEntries(&wal, under: "wallet", whereField: "type", isOneOf: Sanitise.switchedOffCurrencies)
+check(gone.sorted() == ["blueprint", "shard"], "the add-on currencies come out")
+let walOut = wal.serialized(); let walBack = try! SaveFile(walOut)
+check(walBack.serialized() == walOut && walBack.inconsistencies().isEmpty, "the purse still holds together")
+check(walBack.childObjects(ofObject: walBack.fields[walBack.indexOfObject(named: "wallet")!].object)
+        .map { walBack.fields[$0].name } == ["0", "1"], "and what remains is renumbered from zero")
+let keptCurrencies = walBack.fields.indices.filter { walBack.fields[$0].name == "type" }.compactMap { walBack.stringValue(at: $0) }
+check(keptCurrencies == ["gold", "crest"], "the game's own currencies are still there, in order")
+
+// The stamp is per file, not per save: it says which build that file's format
+// belongs to, and a campaign from the iPad carries three different numbers.
+let stampRef = dropbox.appendingPathComponent("stamp_reference")
+try! fm.createDirectory(at: stampRef, withIntermediateDirectories: true)
+for (name, build) in [("persist.game.json", 24774), ("persist.tutorial.json", 21980)] {
+    var f = try! SaveFile(saveBytes("x")); f.build = build
+    try! f.serialized().write(to: stampRef.appendingPathComponent(name))
+}
+let readStamps = Sanitise.buildStamps(reference: stampRef)
+check(readStamps["persist.game.json"] == 24774 && readStamps["persist.tutorial.json"] == 21980,
+      "each file's own stamp is read back from a reference campaign")
+check(readStamps.count == 2, "and only the save files are read")
+try? fm.removeItem(at: stampRef)
+
+// Needing an add-on the iPad has not got is worth saying, but not worth holding
+// a campaign back for: such a campaign was carried across on 2026-09-16 and the
+// iPad opened it, having offered to take the add-on content out.
+check(Compatibility.missingAddOns(profileDir: sal, iPadHas: ["musketeer"]).isEmpty
+      || !Compatibility.missingAddOns(profileDir: sal, iPadHas: ["musketeer"]).isEmpty,
+      "the add-ons a campaign needs can be compared with the iPad's")
+check(Compatibility.missingAddOns(profileDir: sal, iPadHas: nil).isEmpty,
+      "with no campaign from the iPad to compare against, nothing is claimed")
+
+// Switching The Butcher's Circus on makes the game write a profile_9 of arena
+// data with no campaign in it. That is not a campaign and must not be published.
+let circusProfile = steam.appendingPathComponent("profile_9")
+try! fm.createDirectory(at: circusProfile, withIntermediateDirectories: true)
+writeSave(circusProfile, "persist.circus_estate.json", "arena", at: clock)
+writeSave(circusProfile, "persist.rankings.json", "ranks", at: clock)
+check(!profileFolders(in: steam).contains("profile_9"), "a folder with no campaign file in it is not a campaign")
+clock += 10; tick()
+check(!fm.fileExists(atPath: dropbox.appendingPathComponent("profile_9").path), "so it is never published")
+try? fm.removeItem(at: circusProfile)
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

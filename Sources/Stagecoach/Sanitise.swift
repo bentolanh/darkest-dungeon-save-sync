@@ -57,6 +57,26 @@ enum Sanitise {
     /// Circus: it drops the record of which add-ons the campaign was started with.
     static let addOnList = (file: "persist.game.json", object: "dlc", parent: "base_root")
 
+    /// What the iPad stamps into each file, read from a save it wrote itself.
+    ///
+    /// The stamp is not the game's build. It is the build in which that file's
+    /// format last changed, and it differs from file to file: the iPad writes
+    /// 24774 into most, 21980 into the curio tracker and the tutorial, 20343
+    /// into what the game knows. The Mac agrees on the tutorial and disagrees on
+    /// the rest. Stamping one number across a whole campaign tells the iPad that
+    /// three of its files are in a format they are not in.
+    static func buildStamps(reference: URL) -> [String: Int] {
+        var out: [String: Int] = [:]
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: reference.path) else { return out }
+        for name in names where name.hasSuffix(".json") && !Snapshot.ignored(name) {
+            if let d = try? Data(contentsOf: reference.appendingPathComponent(name)),
+               let save = try? SaveFile(d) {
+                out[name] = save.build
+            }
+        }
+        return out
+    }
+
     /// The build the iPad's own saves are written by. Its last content update was
     /// 2019 and its last release 2022; Steam is thousands of builds ahead.
     static let iPadBuild = 24774
@@ -157,6 +177,97 @@ enum Sanitise {
     static let shownAddOnsToKeep: Set<String> =
         ["musketeer", "crimson_court", "districts", "flagellant", "shieldbreaker", "color_of_madness"]
 
+    /// Content belonging to an add-on the iPad has switched off. A campaign
+    /// carrying any of it is one the iPad says it cannot open without stripping
+    /// the add-ons out for good: an offered quest from Colour of Madness, a
+    /// Crimson Court item promised as its reward, a line of narration about the
+    /// Butcher's Circus arena. The numbered entries holding them come out whole,
+    /// and what remains is renumbered.
+    static let switchedOffContent: [(file: String, list: String, markers: [String], describe: String)] = [
+        ("persist.quest.json", "quests",
+         ["cc_", "crimson", "courtyard", "color_of_madness", "farmstead", "comet"],
+         "quests offering add-on content the iPad has switched off"),
+        ("persist.narration.json", "town_visit_entry_log",
+         ["arena"],
+         "lines in the town narration log about the Butcher's Circus arena"),
+        ("persist.narration.json", "campaign_entry_log",
+         ["arena"],
+         "lines in the campaign narration log about the Butcher's Circus arena"),
+        ("persist.narration.json", "raid_entry_log",
+         ["arena"],
+         "lines in the raid narration log about the Butcher's Circus arena"),
+    ]
+
+    /// The estate's purse carries a line per currency. Gold, busts, portraits,
+    /// deeds and crests are the game's own; shards and memories come with Colour
+    /// of Madness and blueprints with Districts, and an estate holding one of
+    /// those is an estate the iPad says it cannot open without stripping the
+    /// add-ons out for good. The line is matched on the currency itself rather
+    /// than on any mention of the word, so nothing else can be caught by it.
+    static let switchedOffCurrencies: Set<String> = ["shard", "memory", "blueprint"]
+
+    /// Trinkets that come with an add-on. Their names give nothing away — a
+    /// Martyr's Seal is Crimson Court but says so nowhere — so this is a list of
+    /// what has actually been met, not a rule that can be derived from the file.
+    /// It is therefore certainly incomplete, and the game's own offer to strip
+    /// add-on content remains the only exhaustive answer.
+    static let switchedOffTrinkets: Set<String> = ["martyrs_seal"]
+
+    /// Removes numbered entries under a list by the value of one of their fields,
+    /// renumbering what remains.
+    static func removeEntries(_ save: inout SaveFile, under list: String, inside parent: String? = nil,
+                              whereField field: String, isOneOf unwanted: Set<String>) -> [String] {
+        // "items" is a name many lists use, so the enclosing object has to be
+        // named too when it matters — the estate's trinkets live in trinkets/items.
+        guard let listField = save.indexOfObject(named: list, under: parent) else { return [] }
+        var dropped: [String] = []
+        while true {
+            let entries = save.childObjects(ofObject: save.fields[listField].object)
+            var hit: (Int, String)? = nil
+            for entry in entries {
+                let o = save.fields[entry].object
+                let start = save.objects[o].nameField
+                let end = min(start + 1 + save.objects[o].all, save.fields.count)
+                for i in start..<end where save.fields[i].name == field {
+                    if let v = save.stringValue(at: i), unwanted.contains(v) { hit = (entry, v) }
+                    break
+                }
+                if hit != nil { break }
+            }
+            guard let (entry, name) = hit else { break }
+            save.removeObject(at: entry)
+            dropped.append(name)
+        }
+        if !dropped.isEmpty {
+            for (i, entry) in save.childObjects(ofObject: save.fields[listField].object).enumerated() {
+                save.renameField(at: entry, to: String(i))
+            }
+        }
+        return dropped
+    }
+
+    /// Removes the numbered entries under a list whose contents mention any of
+    /// these, renumbering the rest so they still run from zero.
+    static func removeEntriesMentioning(_ save: inout SaveFile, under list: String, markers: [String]) -> Int {
+        guard let listField = save.indexOfObject(named: list) else { return 0 }
+        var removed = 0
+        while true {
+            let entries = save.childObjects(ofObject: save.fields[listField].object)
+            guard let doomed = entries.first(where: { entry in
+                let o = save.fields[entry].object
+                return markers.contains { save.subtree(ofObject: o, mentions: $0) }
+            }) else { break }
+            save.removeObject(at: doomed)
+            removed += 1
+        }
+        if removed > 0 {
+            for (i, entry) in save.childObjects(ofObject: save.fields[listField].object).enumerated() {
+                save.renameField(at: entry, to: String(i))
+            }
+        }
+        return removed
+    }
+
     /// Fields the newer build writes inside a hero's own record. Every hero on
     /// this Mac carries a trinketId; no hero the iPad wrote has ever had one.
     static let newerInsideHeroes = ["trinketId", "added_buffs", "did_transform",
@@ -179,8 +290,6 @@ enum Sanitise {
 
     /// Traces that cannot be lifted out without rewriting a value, and are left in.
     static let tolerated: [(file: String, marker: String, describe: String)] = [
-        ("persist.narration.json", "arena",
-         "two lines in the narration log remember an arena voice clip; they are a record of what has been said, not content the town has to load"),
     ]
 
     /// Writes a cleaned copy of `source` into `destination`. Files needing no
@@ -190,7 +299,8 @@ enum Sanitise {
     static func copy(profile: String, from source: URL, to destination: URL, snapshot: Snapshot,
                      clearAddOnList: Bool = false, matchIPadBuild: Bool = false,
                      stripNewerStructures: Bool = true, stripQuirkTrinkets: Bool = false,
-                     keepAddOns: Set<String>? = nil, rename: String? = nil) throws -> SanitiseReport {
+                     keepAddOns: Set<String>? = nil, rename: String? = nil,
+                     buildStamps: [String: Int] = [:]) throws -> SanitiseReport {
         var report = SanitiseReport(profile: profile, estate: CampaignInfo.read(profileDir: source).estate)
         var rewritten: [String: Data] = [:]
 
@@ -251,7 +361,10 @@ enum Sanitise {
                     continue
                 }
                 var touched = false
-                if matchIPadBuild, save.build != iPadBuild { save.build = iPadBuild; touched = true }
+                // Per file: what a save from the iPad carries for this very file,
+                // falling back to the one the iPad writes for most of them.
+                let want = buildStamps[name] ?? iPadBuild
+                if matchIPadBuild, save.build != want { save.build = want; touched = true }
 
                 for (field, _) in (stripNewerStructures ? (perFile[name] ?? []) : []) {
                     let n = save.removeAll(named: field)
@@ -261,7 +374,7 @@ enum Sanitise {
 
                 let out = save.serialized()
                 guard let check = try? SaveFile(out), check.serialized() == out,
-                      !matchIPadBuild || check.build == iPadBuild else {
+                      !matchIPadBuild || check.build == want else {
                     throw SanitiseFailure.rewriteUnverified("\(name): matching the iPad's build did not read back cleanly")
                 }
                 rewritten[name] = out
@@ -269,12 +382,70 @@ enum Sanitise {
             }
             if matchIPadBuild {
                 report.matchedIPadBuild = true
-                report.removed.append("everything stamped as build \(iPadBuild), the one the iPad writes, instead of \(SaveFile.steamBuildHint)")
+                report.removed.append("each file stamped with the build the iPad writes for that file")
             }
             for (f, n) in report.strippedNewer.sorted(by: { $0.key < $1.key }) {
                 let what = (newerThanIPad.first { $0.field == f }?.describe) ?? "a structure the newer build added"
                 report.removed.append("\(what) — \(f), \(n) place\(n == 1 ? "" : "s")")
             }
+        }
+
+        if snapshot.files["persist.estate.json"] != nil {
+            let url = source.appendingPathComponent("persist.estate.json")
+            if let data = try? rewritten["persist.estate.json"] ?? Data(contentsOf: url),
+               var save = try? SaveFile(data) {
+                var dropped = removeEntries(&save, under: "wallet", whereField: "type", isOneOf: switchedOffCurrencies)
+                let trinkets = removeEntries(&save, under: "items", inside: "trinkets",
+                                             whereField: "id", isOneOf: switchedOffTrinkets)
+                dropped += trinkets
+                if !dropped.isEmpty {
+                    let out = save.serialized()
+                    guard let check = try? SaveFile(out), check.serialized() == out, check.inconsistencies().isEmpty else {
+                        throw SanitiseFailure.inconsistent("persist.estate.json", "removing the add-on currencies left it unsound")
+                    }
+                    rewritten["persist.estate.json"] = out
+                    report.removed.append("add-on belongings in the estate — \(dropped.joined(separator: ", "))")
+                    if !report.changedFiles.contains("persist.estate.json") { report.changedFiles.append("persist.estate.json") }
+                }
+            }
+        }
+
+        // The novelty tracker notes each trinket the player has seen, by name, as
+        // the field itself rather than as a value in a list.
+        if snapshot.files["novelty_tracker.json"] != nil {
+            let url = source.appendingPathComponent("novelty_tracker.json")
+            if let data = try? rewritten["novelty_tracker.json"] ?? Data(contentsOf: url),
+               var save = try? SaveFile(data) {
+                var gone: [String] = []
+                for trinket in switchedOffTrinkets.sorted() where save.removeAll(named: trinket) > 0 {
+                    gone.append(trinket)
+                }
+                if !gone.isEmpty {
+                    let out = save.serialized()
+                    guard let check = try? SaveFile(out), check.serialized() == out, check.inconsistencies().isEmpty else {
+                        throw SanitiseFailure.inconsistent("novelty_tracker.json", "removing an add-on trinket left it unsound")
+                    }
+                    rewritten["novelty_tracker.json"] = out
+                    report.removed.append("add-on trinkets noted as seen — \(gone.joined(separator: ", "))")
+                    if !report.changedFiles.contains("novelty_tracker.json") { report.changedFiles.append("novelty_tracker.json") }
+                }
+            }
+        }
+
+        for rule in switchedOffContent {
+            guard snapshot.files[rule.file] != nil else { continue }
+            let url = source.appendingPathComponent(rule.file)
+            guard let data = try? rewritten[rule.file] ?? Data(contentsOf: url),
+                  var save = try? SaveFile(data) else { continue }
+            let n = removeEntriesMentioning(&save, under: rule.list, markers: rule.markers)
+            guard n > 0 else { continue }
+            let out = save.serialized()
+            guard let check = try? SaveFile(out), check.serialized() == out, check.inconsistencies().isEmpty else {
+                throw SanitiseFailure.inconsistent(rule.file, "removing \(rule.describe) left it unsound")
+            }
+            rewritten[rule.file] = out
+            report.removed.append("\(n) \(rule.describe)")
+            if !report.changedFiles.contains(rule.file) { report.changedFiles.append(rule.file) }
         }
 
         if stripNewerStructures, snapshot.files["persist.roster.json"] != nil {

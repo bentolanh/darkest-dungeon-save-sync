@@ -6,7 +6,7 @@
 //   stagecoach-cli steam-write-test   read steam_init.json from the cloud and write it back unchanged
 //   stagecoach-cli sync               run one sync pass with the real folders and ledger
 //   stagecoach-cli codec-check <dir>  read and rewrite every save under a folder, byte for byte
-//   stagecoach-cli prepare <profile_N> [--without-add-ons] [--keep-build]
+//   stagecoach-cli prepare <profile_N> [--without-add-ons] [--keep-build] [--like <iPad profile dir>]
 //                                     publish a copy of a Mac campaign the iPad can open
 //   stagecoach-cli steam-push <profile_N> [folder]
 //                                     write a profile folder into Steam Cloud through the client
@@ -144,6 +144,10 @@ case "prepare":
     if let i = args.firstIndex(of: "--keep-add-ons"), args.index(after: i) < args.endIndex {
         keepAddOns = Set(args[args.index(after: i)].split(separator: ",").map(String.init))
     }
+    var stamps: [String: Int] = [:]
+    if let i = args.firstIndex(of: "--like"), args.index(after: i) < args.endIndex {
+        stamps = Sanitise.buildStamps(reference: URL(fileURLWithPath: args[args.index(after: i)], isDirectory: true))
+    }
     var rename: String? = nil
     if let i = args.firstIndex(of: "--rename"), args.index(after: i) < args.endIndex { rename = args[args.index(after: i)] }
     var slot = profile
@@ -158,7 +162,7 @@ case "prepare":
                                   to: dropbox.appendingPathComponent(slot, isDirectory: true), snapshot: snap,
                                   clearAddOnList: clearAddOns, matchIPadBuild: matchBuild,
                                   stripNewerStructures: stripNewer, stripQuirkTrinkets: stripQuirks,
-                                  keepAddOns: keepAddOns, rename: rename)
+                                  keepAddOns: keepAddOns, rename: rename, buildStamps: stamps)
         var led = Ledger.load()
         led.preparedForIPad[slot] = snap.digest
         led.profiles[slot] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),

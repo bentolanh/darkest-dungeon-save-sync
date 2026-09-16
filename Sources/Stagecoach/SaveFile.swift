@@ -331,13 +331,35 @@ struct SaveFile {
         fields[field].value = v
     }
 
-    /// Renames a field. Only a name of the same length is allowed, so that nothing
-    /// else in the file has to move.
+    /// Renames a field. A different length is allowed: writing the file works out
+    /// every position afresh, so nothing is left standing in the wrong place.
     @discardableResult
     mutating func renameField(at field: Int, to name: String) -> Bool {
-        guard field < fields.count, name.utf8.count == fields[field].name.utf8.count else { return false }
+        guard field < fields.count, !name.isEmpty, name.utf8.count < 200 else { return false }
         fields[field].name = name
         return true
+    }
+
+    /// Every field inside an object, itself included.
+    func subtree(ofObject object: Int) -> ArraySlice<Field> {
+        guard object < objects.count else { return fields[0..<0] }
+        let start = objects[object].nameField
+        let end = min(start + 1 + objects[object].all, fields.count)
+        guard start < end else { return fields[0..<0] }
+        return fields[start..<end]
+    }
+
+    /// True when any name or value inside an object mentions this text.
+    func subtree(ofObject object: Int, mentions needle: String) -> Bool {
+        let n = Array(needle.utf8)
+        for f in subtree(ofObject: object) {
+            if f.name.contains(needle) { return true }
+            let v = f.value
+            if v.count >= n.count {
+                for i in 0...(v.count - n.count) where Array(v[i..<i + n.count]) == n { return true }
+            }
+        }
+        return false
     }
 
     /// The object fields sitting directly inside a given object.

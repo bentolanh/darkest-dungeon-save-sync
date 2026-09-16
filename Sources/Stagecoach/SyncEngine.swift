@@ -43,6 +43,7 @@ struct ProfileStatus: Identifiable, Equatable {
     var profile: String
     var estate: String?
     var issues: [CompatibilityIssue] = []
+    var missingAddOns: [String] = []     // add-ons this campaign needs that the iPad has not got
     var preparedForIPad = false
     var macNewest: Date?
     var mirrorNewest: Date?
@@ -67,6 +68,7 @@ final class SyncEngine {
     private let ledgerURL: URL
     private let queue = DispatchQueue(label: "stagecoach.engine")
     private var stability: [String: (signature: String, since: Date)] = [:]
+    private var reportedMissingAddOns: Set<String> = []
     private var warnedIncompatible: Set<String> = []
     private var pendingRetry: DispatchWorkItem?
 
@@ -116,6 +118,9 @@ final class SyncEngine {
             st.lastError = "Steam save folder or Dropbox folder not found"
             return
         }
+        // What the iPad has switched on, learned from the newest campaign it has
+        // exported. Without one, nothing is assumed.
+        let iPadAddOns = newestIPadAddOns(dropbox: dropbox)
         let gameRunning = config.gameIsRunning()
         var needRetry = false
 
@@ -211,6 +216,27 @@ final class SyncEngine {
                     continue
                 }
 
+                // The iPad can offer to strip a campaign's add-on content for good.
+                // A save that comes back that way must not quietly replace one on
+                // the Mac that still has it.
+                if keep == "ipad", let mac, !mac.isEmpty {
+                    let macHas = Compatibility.addOnBelongings(profileDir: target)
+                    let ipadHas = Compatibility.addOnBelongings(profileDir: source)
+                    let lost = macHas.subtracting(ipadHas)
+                    if !lost.isEmpty, ledger.resolutions[conflictID] == nil {
+                        if !ledger.conflicts.contains(where: { $0.id == conflictID }) {
+                            ledger.conflicts.append(Conflict(profile: profile, exportFolder: name, estate: estate,
+                                                             macNewest: saveTime(of: target, snapshot: mac),
+                                                             ipadNewest: exportTime, detectedAt: config.now(),
+                                                             sourceProfile: sourceProfile))
+                            log("\(label): the iPad copy has had its add-on content stripped (\(lost.sorted().joined(separator: ", ")) is gone); waiting for you to choose")
+                            notify("The iPad copy lost add-on content", "\(estate ?? profile): importing it would drop \(lost.sorted().joined(separator: ", ")) from the Mac save too.")
+                        }
+                        done = false
+                        continue
+                    }
+                }
+
                 if keep == "ipad" {
                     if gameRunning {
                         log("\(label): the game is running, will import once it quits")
@@ -265,17 +291,38 @@ final class SyncEngine {
             // A save carrying content the iPad cannot load is not published: the
             // iPad would list the campaign and then crash opening it.
             ps.issues = Compatibility.check(profileDir: target)
-            ps.preparedForIPad = ledger.preparedForIPad[profile] == mac.digest
+            ps.missingAddOns = Compatibility.missingAddOns(profileDir: target, iPadHas: iPadAddOns)
+            // A copy counts as prepared only while it is still standing in Dropbox.
+            // Remembering one that has since been deleted leaves the campaign
+            // silently unpublished and nothing said about it.
+            ps.preparedForIPad = ledger.preparedForIPad[profile] == mac.digest && mirror != nil
             if ledger.preparedForIPad[profile] != nil, ledger.preparedForIPad[profile] != mac.digest {
                 ledger.preparedForIPad.removeValue(forKey: profile)
                 log("\(ps.estate ?? profile): played since the copy for the iPad was made, so that copy is out of date")
             }
+            // An add-on a campaign was built with cannot be taken away — not by
+            // this tool and not by the game. If the iPad has not got it, that
+            // campaign will never open there, and saying so once is worth more
+            // than publishing a copy that cannot work.
+            // Said once, and then the campaign goes out anyway. A campaign asking
+            // for add-ons the iPad has not got still opens there; the game offers
+            // to take the add-on content out and does. Holding it back would be
+            // deciding something the iPad is better placed to decide.
+            if !ps.missingAddOns.isEmpty, !reportedMissingAddOns.contains(profile) {
+                reportedMissingAddOns.insert(profile)
+                let names = ps.missingAddOns.map(Compatibility.readable).joined(separator: " and ")
+                log("\(ps.estate ?? profile): uses \(names), which the iPad has not got — it will offer to take that content out, and cannot put it back")
+            }
+
+            // The Butcher's Circus building is the one thing still held back. A
+            // campaign with the add-on merely switched on came across fine, but no
+            // campaign with the building itself in its Hamlet has been carried
+            // over yet, so this waits for evidence rather than assuming either way.
             if !ps.issues.isEmpty, !config.publishIncompatible, !ps.preparedForIPad {
                 if mirror?.digest != mac.digest, !warnedIncompatible.contains(profile) {
                     warnedIncompatible.insert(profile)
-                    let what = ps.issues.map(\.marker).joined(separator: ", ")
-                    log("\(ps.estate ?? profile): not published for the iPad — \(ps.issues[0].explanation) (found: \(what))")
-                    notify("This campaign can't go to the iPad", "\(ps.estate ?? profile): \(ps.issues[0].explanation)")
+                    log("\(ps.estate ?? profile): not published for the iPad — \(ps.issues[0].explanation)")
+                    notify("This campaign is held back", "\(ps.estate ?? profile): \(ps.issues[0].explanation)")
                 }
                 continue
             }
@@ -320,6 +367,31 @@ final class SyncEngine {
     }
 
     // MARK: - Pieces
+
+    /// The add-ons the iPad has switched on, learned from the campaign it is
+    /// actually playing.
+    ///
+    /// An export holds every campaign on the iPad, and that includes copies sent
+    /// from this Mac which came back unopened — one of those asks for six add-ons
+    /// the iPad has not got, and reading it would have the tool believe the iPad
+    /// has them all. The campaign to trust is the one most recently saved by the
+    /// game itself, since the iPad can only have saved a campaign it could open.
+    func newestIPadAddOns(dropbox: URL) -> Set<String>? {
+        var best: (when: Date, addOns: Set<String>)?
+        for root in [dropbox, config.archiveFolder].compactMap({ $0 }) {
+            let names = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter(isExportFolder)
+            for name in names {
+                let folder = root.appendingPathComponent(name, isDirectory: true)
+                for slot in profileFolders(in: folder) {
+                    let dir = folder.appendingPathComponent(slot, isDirectory: true)
+                    let list = Sanitise.addOns(in: dir.appendingPathComponent("persist.game.json"))
+                    guard !list.isEmpty, let when = CampaignInfo.read(profileDir: dir).savedAt else { continue }
+                    if best == nil || when > best!.when { best = (when, Set(list)) }
+                }
+            }
+        }
+        return best?.addOns
+    }
 
     /// Which slot in an export goes to which Steam slot. The iPad puts every
     /// imported campaign into a free slot and old copies are left behind, so an

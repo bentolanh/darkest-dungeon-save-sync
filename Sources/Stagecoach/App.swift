@@ -41,6 +41,17 @@ struct PanelView: View {
                 Text("Choose the folders in Settings.").font(.caption).foregroundStyle(.secondary)
             }
 
+            ForEach(model.status.profiles.filter { !$0.missingAddOns.isEmpty }) { p in
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("\(p.estate ?? p.profile) cannot go to the iPad", systemImage: "iphone.slash")
+                        .foregroundStyle(.secondary).font(.callout.bold())
+                    Text("It was built with \(p.missingAddOns.map(Compatibility.readable).joined(separator: " and ")), which the iPad has not got. Which add-ons a campaign uses is fixed when it is created, on any platform, so this cannot be changed afterwards.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.1)))
+            }
+
             ForEach(model.status.conflicts) { c in
                 ConflictView(conflict: c)
             }

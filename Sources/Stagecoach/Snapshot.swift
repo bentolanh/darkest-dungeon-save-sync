@@ -53,10 +53,20 @@ struct Snapshot: Equatable {
 }
 
 /// Names of the campaign-slot folders the game uses: profile_0 … profile_N.
+///
+/// Not everything shaped like one is a campaign. Switching The Butcher's Circus
+/// on makes the game write a profile_9 holding its arena data — a ranking table,
+/// a prize booth, a custom banner — and no campaign at all. Publishing that to
+/// the iPad would put a folder of files it has never heard of where it expects a
+/// campaign, which is the arrangement its own import warns will hang. A campaign
+/// is a folder with a campaign file in it.
 func profileFolders(in dir: URL) -> [String] {
     guard let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
-    return entries.filter { $0.hasPrefix("profile_") && Int($0.dropFirst("profile_".count)) != nil }
-        .sorted { (Int($0.dropFirst(8)) ?? 0) < (Int($1.dropFirst(8)) ?? 0) }
+    return entries.filter { name in
+        guard name.hasPrefix("profile_"), Int(name.dropFirst("profile_".count)) != nil else { return false }
+        return FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent(name).appendingPathComponent("persist.game.json").path)
+    }.sorted { (Int($0.dropFirst(8)) ?? 0) < (Int($1.dropFirst(8)) ?? 0) }
 }
 
 /// Folders the iPad's Export creates: `20260811_153851_upload`.

@@ -141,6 +141,29 @@ zero. The heroes stay: the iPad's own campaign holds three Flagellants while
 asking for no Crimson Court, because a hero lives in the roster rather than
 behind the list.
 
+### The estate's purse
+
+The purse carries a line per currency. Gold, busts, portraits, deeds and crests
+are the game's own. Shards and memories come with Colour of Madness and
+blueprints with Districts, and an estate holding one of those is an estate the
+iPad will not open. A save from the iPad has five lines; this Mac's had eight.
+The three extra ones come out, matched on the currency itself rather than on any
+mention of the word.
+
+### Content from an add-on that is switched off
+
+The lists are bookkeeping; the campaign also has to not *contain* anything from
+an add-on the iPad has switched off, or the game offers to strip the add-ons out
+for good rather than open it. Three things were doing that here: two quests on
+offer from Colour of Madness and Crimson Court, a Crimson Court tincture
+promised as one of their rewards, and a line in the narration log about the
+Butcher's Circus arena. The numbered entries holding them come out whole and
+what remains is renumbered, which is safe because offered quests are replaced
+each week and the log is a record of what has been said.
+
+The test is not a list of rules but a comparison: after preparing, the copy must
+name no add-on content that a save from the iPad does not.
+
 **Known remaining difference.** The Mac's sanitarium records a `trinketId` on
 each quirk. Neither iPad save has ever written a quirk entry at all, so there
 is no evidence about whether its build knows that field. It is left in rather
