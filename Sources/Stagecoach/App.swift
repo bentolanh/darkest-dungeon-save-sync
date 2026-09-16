@@ -43,51 +43,9 @@ struct PanelView: View {
 
             ForEach(model.status.profiles.filter { !$0.missingAddOns.isEmpty }) { p in
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("\(p.estate ?? p.profile) cannot go to the iPad", systemImage: "iphone.slash")
+                    Label("\(p.estate ?? p.profile) uses add-ons the iPad has not got", systemImage: "iphone")
                         .foregroundStyle(.secondary).font(.callout.bold())
-                    Text("It was built with \(p.missingAddOns.map(Compatibility.readable).joined(separator: " and ")), which the iPad has not got. Which add-ons a campaign uses is fixed when it is created, on any platform, so this cannot be changed afterwards.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.1)))
-            }
-
-            ForEach(model.status.conflicts) { c in
-                ConflictView(conflict: c)
-            }
-
-            if !model.status.profiles.isEmpty {
-                Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
-                    GridRow {
-                        Text("Campaign").foregroundStyle(.secondary)
-                        Text("Mac saved").foregroundStyle(.secondary)
-                        Text("Ready for iPad").foregroundStyle(.secondary)
-                        Text("Steam Cloud").foregroundStyle(.secondary)
-                    }.font(.caption)
-                    ForEach(model.status.profiles) { p in
-                        GridRow {
-                            Text(p.estate.map { "\($0) · \(slotName(p.profile))" } ?? slotName(p.profile))
-                            Text(p.macNewest.map(Self.date.string) ?? "–")
-                            HStack(spacing: 4) {
-                                Image(systemName: p.inStep ? "checkmark.circle.fill" : "clock")
-                                    .foregroundStyle(p.inStep ? .green : .orange)
-                                Text(p.inStep ? "in step" : "copying…")
-                            }
-                            Text(cloudText(p))
-                        }.font(.callout)
-                    }
-                }
-            }
-
-            if !model.status.waitingForDownload.isEmpty {
-                Label("Waiting for Dropbox to finish downloading \(model.status.waitingForDownload.joined(separator: ", "))", systemImage: "icloud.and.arrow.down")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            ForEach(model.status.profiles.filter { !$0.missingAddOns.isEmpty }) { p in
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("\(p.estate ?? p.profile) cannot go to the iPad", systemImage: "iphone.slash")
-                        .foregroundStyle(.secondary).font(.callout.bold())
-                    Text("It was built with \(p.missingAddOns.map(Compatibility.readable).joined(separator: " and ")), which the iPad has not got. Which add-ons a campaign uses is fixed when it is created, on any platform, so this cannot be changed afterwards.")
+                    Text("It uses \(p.missingAddOns.map(Compatibility.readable).joined(separator: " and ")). The copy still goes over, and the iPad will offer to take that content out of its own copy before opening the campaign. It cannot put it back, and your Mac save is not affected either way.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(10)
