@@ -52,6 +52,7 @@ struct SyncStatus: Equatable {
     var waitingForDownload: [String] = []
     var exportsStuck: [String] = []          // consumed exports still inside Apps/DarkestDungeon
     var waitingForGameToQuit = false
+    var iPadLastExported: Date?              // when the iPad last sent anything at all
     var lastTick: Date?
     var lastError: String?
 }
@@ -113,6 +114,7 @@ final class SyncEngine {
         // What the iPad has switched on, learned from the newest campaign it has
         // exported. Without one, nothing is assumed.
         let iPadAddOns = newestIPadAddOns(dropbox: dropbox)
+        st.iPadLastExported = newestExportTime(dropbox: dropbox)
         let gameRunning = config.gameIsRunning()
         var needRetry = false
 
@@ -338,6 +340,18 @@ final class SyncEngine {
     }
 
     // MARK: - Pieces
+
+    /// When the iPad last exported anything, read from the names of the export
+    /// folders it writes. Nothing else on this Mac knows what is on the iPad, so
+    /// this is the only honest answer to "how long since it was heard from".
+    func newestExportTime(dropbox: URL) -> Date? {
+        var names: [String] = []
+        for root in [dropbox, config.archiveFolder].compactMap({ $0 }) {
+            names += ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter(isExportFolder)
+        }
+        guard let newest = names.max() else { return nil }
+        return SyncEngine.stampFormatter.date(from: String(newest.dropLast("_upload".count)))
+    }
 
     /// The add-ons the iPad has switched on, learned from the campaign it is
     /// actually playing.

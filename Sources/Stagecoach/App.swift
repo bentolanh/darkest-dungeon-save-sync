@@ -61,7 +61,7 @@ struct PanelView: View {
                     GridRow {
                         Text("Campaign").foregroundStyle(.secondary)
                         Text("Mac saved").foregroundStyle(.secondary)
-                        Text("Ready for iPad").foregroundStyle(.secondary)
+                        Text("Copy in Dropbox").foregroundStyle(.secondary)
                         Text("Steam Cloud").foregroundStyle(.secondary)
                     }.font(.caption)
                     ForEach(model.status.profiles) { p in
@@ -71,7 +71,7 @@ struct PanelView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: p.inStep ? "checkmark.circle.fill" : "clock")
                                     .foregroundStyle(p.inStep ? .green : .orange)
-                                Text(p.inStep ? "in step" : "copying…")
+                                Text(p.inStep ? "current" : "copying…")
                             }
                             Text(cloudText(p))
                         }.font(.callout)
@@ -90,6 +90,13 @@ struct PanelView: View {
             if let err = model.status.lastError {
                 Label(err, systemImage: "xmark.octagon").font(.caption).foregroundStyle(.red)
             }
+
+            // The one thing this Mac cannot know is what is on the iPad. It only
+            // ever hears from it when an export arrives, so say when that was and
+            // leave the judgement to the reader.
+            Text(model.status.iPadLastExported.map { "The iPad last sent a save on \(Self.date.string(from: $0)). Nothing here can see the iPad otherwise." }
+                 ?? "The iPad has not sent a save yet. Nothing here can see the iPad until it does.")
+                .font(.caption).foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
                 Circle().fill(model.steamRunning ? .green : .gray).frame(width: 8, height: 8)
