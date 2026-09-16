@@ -17,9 +17,65 @@ struct StagecoachApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Settings {
-            SettingsView().environmentObject(model)
+
+    }
+}
+
+/// The settings window, built and owned here rather than left to SwiftUI.
+///
+/// An app that lives only in the menu bar is never the active application, and
+/// SwiftUI's own Settings scene assumes it can be: asking for it opened the
+/// window behind whatever was on screen, or seemingly not at all. Owning the
+/// window removes the question — it can be created, raised and kept track of
+/// without anything having to agree to activate first.
+@MainActor
+final class SettingsWindow: NSObject, NSWindowDelegate {
+    static let shared = SettingsWindow()
+    private var window: NSWindow?
+
+    func show(_ model: Model) {
+        if window == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 560),
+                             styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                             backing: .buffered, defer: false)
+            w.title = "Stagecoach Settings"
+            w.isReleasedWhenClosed = false          // reopened, not rebuilt
+            w.delegate = self
+            w.contentView = NSHostingView(rootView: SettingsView().environmentObject(model))
+            window = w
         }
+        guard let window else { return }
+        place(window)
+        NSApp.activate(ignoringOtherApps: true)
+        // Above everything for a moment, then let back down, so it cannot come up
+        // behind the work even if the system declines to activate a menu bar app.
+        window.level = .floating
+        window.makeKeyAndOrderFront(nil)
+        window.orderFrontRegardless()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { window.level = .normal }
+    }
+
+    /// Puts the window on the screen the person is looking at.
+    ///
+    /// Centring puts it on whichever screen the system calls the main one, which
+    /// on a desk with two displays is often not the one being used — the window
+    /// opens perfectly well, on the monitor nobody is facing, and looks like
+    /// nothing happened. The menu bar was just clicked, so the pointer says which
+    /// screen that was.
+    private func place(_ window: NSWindow) {
+        let pointer = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first { $0.frame.contains(pointer) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let frame = screen?.visibleFrame else { window.center(); return }
+        let size = window.frame.size
+        window.setFrameOrigin(NSPoint(x: frame.midX - size.width / 2,
+                                      y: frame.midY - size.height / 2))
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        // The panel is the app's front door; do not leave it holding focus.
+        NSApp.hide(nil)
     }
 }
 
@@ -32,7 +88,9 @@ struct PanelView: View {
                 Text("Stagecoach").font(.headline)
                 Text("Darkest Dungeon save sync").foregroundStyle(.secondary)
                 Spacer()
-                SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.borderless)
+                Button { SettingsWindow.shared.show(model) } label: { Image(systemName: "gearshape") }
+                    .buttonStyle(.borderless)
+                    .help("Settings")
             }
 
             // Both folders are found without being told. When one is missing it is

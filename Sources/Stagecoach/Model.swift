@@ -37,6 +37,16 @@ final class Model: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshProcesses(); self?.engine?.sync(reason: "timer") }
         }
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] note in
+            // Steam starting is the moment a campaign that was waiting for it can
+            // finally be put into the cloud.
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.bundleIdentifier == "com.valvesoftware.steam" else { return }
+            Task { @MainActor in
+                self?.refreshProcesses()
+                self?.engine?.sync(reason: "Steam started")
+            }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshProcesses()

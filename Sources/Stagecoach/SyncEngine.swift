@@ -368,6 +368,26 @@ final class SyncEngine {
             }
         }
 
+        // A campaign imported while Steam was closed is sitting on disk with the
+        // cloud none the wiser. Steam cannot be written to without its client, so
+        // the work waits rather than being lost, and is done the moment it appears.
+        if config.cloudPush, let lib = config.steamworksLibrary, config.steamIsRunning(), !gameRunning {
+            for (profile, record) in ledger.profiles where record.cloudState == "pendingGameLaunch" {
+                let dir = steam.appendingPathComponent(profile, isDirectory: true)
+                guard let snap = Snapshot.read(dir), !snap.isEmpty else { continue }
+                do {
+                    try pushToCloud(profile: profile, folder: dir, snapshot: snap, library: lib)
+                    Thread.sleep(forTimeInterval: 3)
+                    nudgeCloud(library: lib)
+                    let pending = waitForUpload(profile: profile, names: Array(snap.files.keys), seconds: 15)
+                    ledger.profiles[profile]?.cloudState = pending.isEmpty ? "uploaded" : "pendingUpload"
+                    log("\(profile): Steam is running now, so the save that was waiting has gone to Steam Cloud")
+                } catch {
+                    log("\(profile): Steam is running but the push failed (\(error)); it will be tried again")
+                }
+            }
+        }
+
         ledger.save(to: ledgerURL)
         if needRetry {
             let item = DispatchWorkItem { [weak self] in self?.tick(reason: "retry") }
