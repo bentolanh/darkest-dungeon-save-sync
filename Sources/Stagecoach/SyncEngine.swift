@@ -40,6 +40,7 @@ struct ProfileStatus: Identifiable, Equatable {
     var profile: String
     var estate: String?
     var missingAddOns: [String] = []     // add-ons this campaign needs that the iPad has not got
+    var weeks: Int?
     var macNewest: Date?
     var mirrorNewest: Date?
     var inStep: Bool
@@ -175,18 +176,33 @@ final class SyncEngine {
                 // Does the Mac hold progress this export can't contain? Yes if the
                 // Mac's save changed since the two sides were last in step, or if the
                 // export is older than the save the Mac already held at that point.
+                // Does the Mac hold progress this export cannot contain?
+                //
+                // Once the two sides have agreed on a state, this is answerable:
+                // the Mac has moved on if its save differs from what was agreed, or
+                // if the export predates it. Before that first agreement there is
+                // nothing to compare against, and a timestamp will not stand in for
+                // one — opening a campaign on the iPad and leaving again makes it
+                // the newer save while the Mac may hold months more play. So the
+                // first meeting of two campaigns that differ is always asked about.
                 let macMovedOn: Bool
+                let firstMeeting: Bool
                 let exportTime = saveTime(of: source, snapshot: ipad) ?? .distantPast
                 if let mac, !mac.isEmpty {
                     if let record {
                         macMovedOn = mac.digest != record.syncedDigest
                             || exportTime < (record.syncedSaveTime ?? .distantPast)
+                        firstMeeting = false
                     } else {
-                        // Never synced before: the newer save is the one to keep.
-                        macMovedOn = (saveTime(of: target, snapshot: mac) ?? .distantPast) > exportTime
+                        // No agreement to compare against, but weeks played says
+                        // which campaign is further on without having to ask.
+                        macMovedOn = furtherOn((weeksPlayed(of: target), saveTime(of: target, snapshot: mac)),
+                                               than: (weeksPlayed(of: source), exportTime))
+                        firstMeeting = true
                     }
                 } else {
                     macMovedOn = false
+                    firstMeeting = false
                 }
 
                 let keep: String
@@ -194,17 +210,27 @@ final class SyncEngine {
                     keep = "ipad"
                 } else if let choice = ledger.resolutions[conflictID] {
                     keep = choice
-                } else if record == nil {
+                } else if firstMeeting {
                     keep = "mac"
-                    log("\(label): first sync and the Mac save is newer, keeping the Mac save")
-                    notify("Older iPad export set aside", "\(estate ?? profile): the Mac save is newer than the export \(name), so the Mac save was kept. The export is in the archive.")
+                    let mw = weeksPlayed(of: target).map { "week \($0)" } ?? "an unknown week"
+                    let iw = weeksPlayed(of: source).map { "week \($0)" } ?? "an unknown week"
+                    log("\(label): the Mac is at \(mw) and the export at \(iw), so the Mac save is kept")
+                    notify("The iPad's copy is behind", "\(estate ?? profile): the Mac is at \(mw), the iPad at \(iw). The Mac save was kept and the export is in the archive.")
                 } else {
                     if !ledger.conflicts.contains(where: { $0.id == conflictID }) {
-                        let c = Conflict(profile: profile, exportFolder: name, estate: estate, macNewest: saveTime(of: target, snapshot: mac),
-                                         ipadNewest: exportTime, detectedAt: config.now(), sourceProfile: sourceProfile)
+                        let c = Conflict(profile: profile, exportFolder: name, estate: estate,
+                                         macNewest: saveTime(of: target, snapshot: mac),
+                                         ipadNewest: exportTime, detectedAt: config.now(),
+                                         sourceProfile: sourceProfile, firstMeeting: firstMeeting)
                         ledger.conflicts.append(c)
-                        log("\(label): both the iPad and the Mac have new progress — waiting for you to choose")
-                        notify("Which save should win?", "\(estate ?? profile): the iPad export and the Mac save both changed. Open Stagecoach to choose.")
+                        let why = firstMeeting
+                            ? "these two campaigns have never been synced, so which is further on is yours to say"
+                            : "both the iPad and the Mac have new progress"
+                        log("\(label): \(why) — waiting for you to choose")
+                        notify("Which save should win?",
+                               firstMeeting
+                               ? "\(estate ?? profile): the Mac and the iPad each hold a copy and they have never been synced. Open Stagecoach to choose."
+                               : "\(estate ?? profile): the iPad export and the Mac save both changed. Open Stagecoach to choose.")
                     }
                     done = false
                     continue
@@ -280,6 +306,7 @@ final class SyncEngine {
             let mirrorURL = dropbox.appendingPathComponent(profile, isDirectory: true)
             let mirror = Snapshot.read(mirrorURL)
             var ps = ProfileStatus(profile: profile, estate: CampaignInfo.read(profileDir: target).estate,
+                                   weeks: weeksPlayed(of: target),
                                    macNewest: saveTime(of: target, snapshot: mac), mirrorNewest: mirror?.newestModified,
                                    inStep: mirror?.digest == mac.digest, record: ledger.profiles[profile])
             defer { st.profiles.append(ps) }
@@ -391,18 +418,21 @@ final class SyncEngine {
                 steamEstates[e] = slot
             }
         }
-        var newestByEstate: [String: (slot: String, time: Date)] = [:]
+        var newestByEstate: [String: (slot: String, time: Date, weeks: Int?)] = [:]
         var unnamed: [String] = []
         for slot in profileFolders(in: export) {
             let dir = export.appendingPathComponent(slot, isDirectory: true)
             let info = CampaignInfo.read(profileDir: dir)
             guard let estate = info.estate else { unnamed.append(slot); continue }
             let t = info.savedAt ?? Snapshot.read(dir)?.newestModified ?? .distantPast
+            let w = weeksPlayed(of: dir)
             if let have = newestByEstate[estate] {
-                let loser = t > have.time ? have.slot : slot
-                log("\(export.lastPathComponent)/\(loser): older copy of \(estate), skipped")
+                let loser = furtherOn((w, t), than: (have.weeks, have.time)) ? have.slot : slot
+                log("\(export.lastPathComponent)/\(loser): a copy of \(estate) that is not as far on, skipped")
             }
-            if newestByEstate[estate] == nil || t > newestByEstate[estate]!.time { newestByEstate[estate] = (slot, t) }
+            if newestByEstate[estate] == nil || furtherOn((w, t), than: (newestByEstate[estate]!.weeks, newestByEstate[estate]!.time)) {
+                newestByEstate[estate] = (slot, t, w)
+            }
         }
         var taken = Set(profileFolders(in: steam))
         var out: [(String, String)] = []

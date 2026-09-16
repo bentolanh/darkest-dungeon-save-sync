@@ -51,6 +51,31 @@ struct CampaignInfo: Equatable {
     }()
 }
 
+/// How far a campaign has got, counted in weeks.
+///
+/// The campaign log keeps one chapter per expedition, and an expedition is a
+/// week, so the number of chapters is the week the game shows beside the estate
+/// — checked against four campaigns, two written on each machine, where it read
+/// 44 and 45 exactly as the game displayed them.
+///
+/// This is the measure of progress, not the save's timestamp. Opening a campaign
+/// and leaving again writes the file without advancing anything, so by date it
+/// becomes the newer save while holding less play. By weeks it does not move.
+func weeksPlayed(of profileDir: URL) -> Int? {
+    guard let data = try? Data(contentsOf: profileDir.appendingPathComponent("persist.campaign_log.json")),
+          let save = try? SaveFile(data),
+          let chapters = save.indexOfObject(named: "chapters") else { return nil }
+    return save.childObjects(ofObject: save.fields[chapters].object).count
+}
+
+/// Which of two campaigns is further on: more weeks played, and where those are
+/// equal the one saved later. A tie on weeks means at most one expedition
+/// between them, so the timestamp is a fair way to settle it.
+func furtherOn(_ a: (weeks: Int?, saved: Date?), than b: (weeks: Int?, saved: Date?)) -> Bool {
+    if let aw = a.weeks, let bw = b.weeks, aw != bw { return aw > bw }
+    return (a.saved ?? .distantPast) > (b.saved ?? .distantPast)
+}
+
 /// The game's own save time when the file says so, else the newest file date.
 func saveTime(of dir: URL, snapshot: Snapshot?) -> Date? {
     CampaignInfo.read(profileDir: dir).savedAt ?? snapshot?.newestModified

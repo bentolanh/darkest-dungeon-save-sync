@@ -21,6 +21,7 @@ struct Conflict: Codable, Equatable, Identifiable {
     var ipadNewest: Date?
     var detectedAt: Date
     var sourceProfile: String?     // the slot inside the export folder
+    var firstMeeting = false       // never synced before, rather than both having moved
 }
 
 struct Ledger: Codable, Equatable {

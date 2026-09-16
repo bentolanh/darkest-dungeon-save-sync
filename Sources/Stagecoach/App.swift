@@ -69,6 +69,7 @@ struct PanelView: View {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
                     GridRow {
                         Text("Campaign").foregroundStyle(.secondary)
+                        Text("Week").foregroundStyle(.secondary)
                         Text("Mac saved").foregroundStyle(.secondary)
                         Text("Copy in Dropbox").foregroundStyle(.secondary)
                         Text("Steam Cloud").foregroundStyle(.secondary)
@@ -76,6 +77,7 @@ struct PanelView: View {
                     ForEach(model.status.profiles) { p in
                         GridRow {
                             Text(p.estate.map { "\($0) · \(slotName(p.profile))" } ?? slotName(p.profile))
+                            Text(p.weeks.map(String.init) ?? "–")
                             Text(p.macNewest.map(Self.date.string) ?? "–")
                             HStack(spacing: 4) {
                                 Image(systemName: p.inStep ? "checkmark.circle.fill" : "clock")
@@ -165,9 +167,14 @@ struct ConflictView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Label("Both sides have new progress in \(conflict.estate ?? conflict.profile)", systemImage: "exclamationmark.triangle.fill")
+            Label(conflict.firstMeeting
+                  ? "\(conflict.estate ?? conflict.profile) is on both machines, and they have never been synced"
+                  : "Both sides have new progress in \(conflict.estate ?? conflict.profile)",
+                  systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange).font(.callout.bold())
-            Text("The iPad export \(conflict.exportFolder) (saved \(conflict.ipadNewest.map(PanelView.date.string) ?? "?")) and the Mac save (saved \(conflict.macNewest.map(PanelView.date.string) ?? "?")) have both changed since they were last in step. The one you don't keep is backed up.")
+            Text(conflict.firstMeeting
+                 ? "The iPad's copy was saved \(conflict.ipadNewest.map(PanelView.date.string) ?? "?") and the Mac's \(conflict.macNewest.map(PanelView.date.string) ?? "?"). Which is further on is not something a date can settle — opening a campaign and leaving again makes it the newer one — so it is yours to say. The one you don't keep is backed up."
+                 : "The iPad export \(conflict.exportFolder) (saved \(conflict.ipadNewest.map(PanelView.date.string) ?? "?")) and the Mac save (saved \(conflict.macNewest.map(PanelView.date.string) ?? "?")) have both changed since they were last in step. The one you don't keep is backed up.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button("Keep the iPad save") { model.resolve(conflict, keep: "ipad") }

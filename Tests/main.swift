@@ -53,12 +53,26 @@ func gameFile(estate: String, savedAt: String, salt: String = "") -> Data {
     put(8, 64); put(24, 64); put(48, 64); put(56, body.count); put(60, 64)
     return Data(h) + body
 }
-func makeCampaign(_ dir: URL, estate: String, savedAt: String, roster: String, at date: Date) {
+/// A campaign log with a chapter per week, which is how far on a campaign is.
+func campaignLog(weeks: Int) -> Data {
+    var objs: [(Int, Int, Int, Int)] = [(0, 0, 1, 1 + weeks), (0, 1, weeks, weeks)]
+    var flds: [(String, Bool, Int, [UInt8])] = [("base_root", true, 0, []), ("chapters", true, 1, [])]
+    for i in 1...max(weeks, 1) where weeks > 0 {
+        objs.append((1, flds.count, 0, 0))
+        flds.append((String(i), true, objs.count - 1, []))
+    }
+    return dsonFile(objects: objs, fields: flds)
+}
+
+func makeCampaign(_ dir: URL, estate: String, savedAt: String, roster: String, at date: Date, weeks: Int = 1) {
     try! fm.createDirectory(at: dir, withIntermediateDirectories: true)
     let url = dir.appendingPathComponent("persist.game.json")
     try! gameFile(estate: estate, savedAt: savedAt, salt: roster).write(to: url)
     try! fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
     writeSave(dir, "persist.roster.json", roster, at: date)
+    let log = dir.appendingPathComponent("persist.campaign_log.json")
+    try! campaignLog(weeks: weeks).write(to: log)
+    try! fm.setAttributes([.modificationDate: date], ofItemAtPath: log.path)
 }
 func estateOf(_ dir: URL) -> String? { CampaignInfo.read(profileDir: dir).estate }
 
@@ -103,27 +117,44 @@ engine.log = { print("       log: \($0)") }
 func tick() { engine.syncNow(reason: "test") }
 func settle() { tick(); clock += 6; tick() }   // export folders need one quiet period
 
-print("1. First run: an old export sits in Dropbox, the Mac save is newer")
+print("1. First meeting: weeks played decide, not the clock")
 makeProfile(steam.appendingPathComponent("profile_1"), game: "mac-v2", roster: "mac-v2", at: clock - 3600)
 write(steam.appendingPathComponent("profile_1/backup"), "persist.game.json", "old", at: clock - 7200)
-makeProfile(dropbox.appendingPathComponent("20260811_153851_upload/profile_1"), game: "ipad-v1", roster: "ipad-v1", at: clock - 86400)
+try! campaignLog(weeks: 44).write(to: steam.appendingPathComponent("profile_1/persist.campaign_log.json"))
+let oldExport = dropbox.appendingPathComponent("20260811_153851_upload/profile_1")
+makeProfile(oldExport, game: "ipad-v1", roster: "ipad-v1", at: clock - 60)
+try! campaignLog(weeks: 40).write(to: oldExport.appendingPathComponent("persist.campaign_log.json"))
 settle()
-check(read(steam.appendingPathComponent("profile_1"), "persist.game.json") == "mac-v2", "Mac save untouched")
-check(read(dropbox.appendingPathComponent("profile_1"), "persist.game.json") == "mac-v2", "Mac save mirrored to Dropbox root")
-check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260811_153851_upload").path), "old export moved out of Apps/DarkestDungeon")
-check(fm.fileExists(atPath: archive.appendingPathComponent("20260811_153851_upload/profile_1/persist.game.json").path), "old export is in the archive")
+// The export was written a minute ago and the Mac save an hour ago, so by the
+// clock the iPad wins. By weeks played the Mac is four expeditions ahead.
+check(read(steam.appendingPathComponent("profile_1"), "persist.game.json") == "mac-v2", "the Mac save is kept")
+check(engine.status.conflicts.isEmpty, "and nothing is asked, because weeks played settles it")
+check(read(dropbox.appendingPathComponent("profile_1"), "persist.game.json") == "mac-v2", "the Mac save is published")
+check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260811_153851_upload").path), "the export is moved out of the way")
+check(fm.fileExists(atPath: archive.appendingPathComponent("20260811_153851_upload/profile_1/persist.game.json").path), "and kept in the archive")
 check(!fm.fileExists(atPath: dropbox.appendingPathComponent("profile_1/backup").path), "game's backup/ subfolder not mirrored")
-check(engine.status.conflicts.isEmpty, "no conflict on first run")
 check(engine.ledger.profiles["profile_1"]?.lastSource == "mac", "ledger records the Mac as the source")
 
-print("1b. First run for another slot: the export is newer than the Mac save")
-makeProfile(steam.appendingPathComponent("profile_2"), game: "mac-old", roster: "mac-old", at: clock - 86400)
-makeProfile(dropbox.appendingPathComponent("20260901_090000_upload/profile_2"), game: "ipad-new", roster: "ipad-new", at: clock - 3600)
+print("1b. A first meeting where the iPad is further on imports without asking")
+let macOld = steam.appendingPathComponent("profile_2")
+makeProfile(macOld, game: "mac-old", roster: "mac-old", at: clock - 60)
+try! campaignLog(weeks: 10).write(to: macOld.appendingPathComponent("persist.campaign_log.json"))
+let newExport = dropbox.appendingPathComponent("20260901_090000_upload/profile_2")
+makeProfile(newExport, game: "ipad-new", roster: "ipad-new", at: clock - 3600)
+try! campaignLog(weeks: 12).write(to: newExport.appendingPathComponent("persist.campaign_log.json"))
 settle()
-check(read(steam.appendingPathComponent("profile_2"), "persist.game.json") == "ipad-new", "newer export imported on first run")
+check(read(macOld, "persist.game.json") == "ipad-new", "the further-on export is imported")
+check(engine.status.conflicts.isEmpty, "with nothing asked")
 check(read(dropbox.appendingPathComponent("profile_2"), "persist.game.json") == "ipad-new", "and mirrored")
-try? fm.removeItem(at: steam.appendingPathComponent("profile_2")); try? fm.removeItem(at: dropbox.appendingPathComponent("profile_2"))
-try? fm.removeItem(at: backups)
+try? fm.removeItem(at: macOld); try? fm.removeItem(at: dropbox.appendingPathComponent("profile_2"))
+
+print("1c. Equal weeks fall back to the clock, where the difference is small")
+check(furtherOn((44, Date(timeIntervalSince1970: 100)), than: (40, Date(timeIntervalSince1970: 900))),
+      "more weeks wins however old the save")
+check(furtherOn((44, Date(timeIntervalSince1970: 900)), than: (44, Date(timeIntervalSince1970: 100))),
+      "equal weeks fall back to the later save")
+check(!furtherOn((nil, Date(timeIntervalSince1970: 100)), than: (nil, Date(timeIntervalSince1970: 900))),
+      "with no weeks to read, the clock is all there is")
 
 print("2. The Mac game saves again")
 clock += 60
@@ -146,8 +177,10 @@ check(read(steam.appendingPathComponent("profile_1"), "persist.game.json") == "i
 check(read(steam.appendingPathComponent("profile_1/backup"), "persist.game.json") == "old", "game's own backup/ left alone")
 check(read(dropbox.appendingPathComponent("profile_1"), "persist.game.json") == "ipad-v4", "Dropbox root updated to match")
 check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260915_120000_upload").path), "export archived")
-let backupDirs = (try? fm.contentsOfDirectory(atPath: backups.path)) ?? []
-check(backupDirs.count == 1 && read(backups.appendingPathComponent(backupDirs[0] + "/profile_1"), "persist.game.json") == "mac-v3", "the overwritten Mac save was backed up")
+// Earlier steps also replaced a save, so take the newest backup rather than the only one.
+let backupDirs = ((try? fm.contentsOfDirectory(atPath: backups.path)) ?? []).sorted()
+check(backupDirs.contains { read(backups.appendingPathComponent($0 + "/profile_1"), "persist.game.json") == "mac-v3" },
+      "the overwritten Mac save was backed up")
 check(engine.ledger.profiles["profile_1"]?.lastSource == "ipad", "ledger records the iPad as the source")
 check(engine.ledger.profiles["profile_1"]?.cloudState == "pendingGameLaunch", "cloud state: waits for the next game launch (no Steam)")
 
