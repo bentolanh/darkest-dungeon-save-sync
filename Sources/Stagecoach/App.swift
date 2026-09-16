@@ -13,7 +13,7 @@ struct StagecoachApp: App {
         MenuBarExtra {
             PanelView().environmentObject(model)
         } label: {
-            Image(systemName: model.status.conflicts.isEmpty ? "arrow.triangle.2.circlepath" : "exclamationmark.triangle.fill")
+            Image(nsImage: MenuBarIcon.image(needsAttention: !model.status.conflicts.isEmpty))
         }
         .menuBarExtraStyle(.window)
 
