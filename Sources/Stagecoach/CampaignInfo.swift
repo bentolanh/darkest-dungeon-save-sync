@@ -68,11 +68,32 @@ func weeksPlayed(of profileDir: URL) -> Int? {
     return save.childObjects(ofObject: save.fields[chapters].object).count
 }
 
-/// Which of two campaigns is further on: more weeks played, and where those are
-/// equal the one saved later. A tie on weeks means at most one expedition
-/// between them, so the timestamp is a fair way to settle it.
-func furtherOn(_ a: (weeks: Int?, saved: Date?), than b: (weeks: Int?, saved: Date?)) -> Bool {
+/// Whether the party is out on an expedition rather than back in the Hamlet.
+///
+/// A dungeon comes after the week's preparation, so at the same week a campaign
+/// mid-expedition is further on than one still in town. The save records it
+/// plainly: `inraid` is a single byte, zero when at home.
+func inDungeon(_ profileDir: URL) -> Bool? {
+    guard let data = try? Data(contentsOf: profileDir.appendingPathComponent("persist.game.json")),
+          let save = try? SaveFile(data),
+          let i = save.fields.firstIndex(where: { $0.name == "inraid" }) else { return nil }
+    let value = save.fields[i].value
+    let pad = (4 - save.fields[i].align) % 4
+    guard value.count > pad else { return nil }
+    return value[pad] != 0
+}
+
+/// Which of two campaigns is further on.
+///
+/// Weeks played first, since that is the campaign's own measure of progress.
+/// At the same week, a party out on an expedition is ahead of one still in the
+/// Hamlet, because the dungeon follows the preparation. Only when those both
+/// agree does it come down to which was saved later, and by then at most one
+/// expedition separates them, so either answer costs little.
+func furtherOn(_ a: (weeks: Int?, inDungeon: Bool?, saved: Date?),
+               than b: (weeks: Int?, inDungeon: Bool?, saved: Date?)) -> Bool {
     if let aw = a.weeks, let bw = b.weeks, aw != bw { return aw > bw }
+    if let ad = a.inDungeon, let bd = b.inDungeon, ad != bd { return ad }
     return (a.saved ?? .distantPast) > (b.saved ?? .distantPast)
 }
 

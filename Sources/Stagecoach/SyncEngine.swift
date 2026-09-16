@@ -196,8 +196,8 @@ final class SyncEngine {
                     } else {
                         // No agreement to compare against, but weeks played says
                         // which campaign is further on without having to ask.
-                        macMovedOn = furtherOn((weeksPlayed(of: target), saveTime(of: target, snapshot: mac)),
-                                               than: (weeksPlayed(of: source), exportTime))
+                        macMovedOn = furtherOn((weeksPlayed(of: target), inDungeon(target), saveTime(of: target, snapshot: mac)),
+                                               than: (weeksPlayed(of: source), inDungeon(source), exportTime))
                         firstMeeting = true
                     }
                 } else {
@@ -212,8 +212,11 @@ final class SyncEngine {
                     keep = choice
                 } else if firstMeeting {
                     keep = "mac"
-                    let mw = weeksPlayed(of: target).map { "week \($0)" } ?? "an unknown week"
-                    let iw = weeksPlayed(of: source).map { "week \($0)" } ?? "an unknown week"
+                    func where_(_ dir: URL) -> String {
+                        let w = weeksPlayed(of: dir).map { "week \($0)" } ?? "an unknown week"
+                        return (inDungeon(dir) == true) ? "\(w), out on an expedition" : w
+                    }
+                    let mw = where_(target), iw = where_(source)
                     log("\(label): the Mac is at \(mw) and the export at \(iw), so the Mac save is kept")
                     notify("The iPad's copy is behind", "\(estate ?? profile): the Mac is at \(mw), the iPad at \(iw). The Mac save was kept and the export is in the archive.")
                 } else {
@@ -418,7 +421,7 @@ final class SyncEngine {
                 steamEstates[e] = slot
             }
         }
-        var newestByEstate: [String: (slot: String, time: Date, weeks: Int?)] = [:]
+        var newestByEstate: [String: (slot: String, time: Date, weeks: Int?, inDungeon: Bool?)] = [:]
         var unnamed: [String] = []
         for slot in profileFolders(in: export) {
             let dir = export.appendingPathComponent(slot, isDirectory: true)
@@ -426,12 +429,14 @@ final class SyncEngine {
             guard let estate = info.estate else { unnamed.append(slot); continue }
             let t = info.savedAt ?? Snapshot.read(dir)?.newestModified ?? .distantPast
             let w = weeksPlayed(of: dir)
+            let raid = inDungeon(dir)
             if let have = newestByEstate[estate] {
-                let loser = furtherOn((w, t), than: (have.weeks, have.time)) ? have.slot : slot
+                let loser = furtherOn((w, raid, t), than: (have.weeks, have.inDungeon, have.time)) ? have.slot : slot
                 log("\(export.lastPathComponent)/\(loser): a copy of \(estate) that is not as far on, skipped")
             }
-            if newestByEstate[estate] == nil || furtherOn((w, t), than: (newestByEstate[estate]!.weeks, newestByEstate[estate]!.time)) {
-                newestByEstate[estate] = (slot, t, w)
+            if newestByEstate[estate] == nil
+                || furtherOn((w, raid, t), than: (newestByEstate[estate]!.weeks, newestByEstate[estate]!.inDungeon, newestByEstate[estate]!.time)) {
+                newestByEstate[estate] = (slot, t, w, raid)
             }
         }
         var taken = Set(profileFolders(in: steam))

@@ -36,7 +36,7 @@ func read(_ dir: URL, _ name: String) -> String? {
     return String(data: d, encoding: .utf8)
 }
 /// A persist.game.json in the game's binary layout, enough for the fields we read.
-func gameFile(estate: String, savedAt: String, salt: String = "") -> Data {
+func gameFile(estate: String, savedAt: String, salt: String = "", inRaid: Bool = false) -> Data {
     var body = Data()
     func field(_ name: String, _ value: String) {
         body.append(contentsOf: Array((name + "\0").utf8))
@@ -149,12 +149,15 @@ check(read(dropbox.appendingPathComponent("profile_2"), "persist.game.json") == 
 try? fm.removeItem(at: macOld); try? fm.removeItem(at: dropbox.appendingPathComponent("profile_2"))
 
 print("1c. Equal weeks fall back to the clock, where the difference is small")
-check(furtherOn((44, Date(timeIntervalSince1970: 100)), than: (40, Date(timeIntervalSince1970: 900))),
-      "more weeks wins however old the save")
-check(furtherOn((44, Date(timeIntervalSince1970: 900)), than: (44, Date(timeIntervalSince1970: 100))),
-      "equal weeks fall back to the later save")
-check(!furtherOn((nil, Date(timeIntervalSince1970: 100)), than: (nil, Date(timeIntervalSince1970: 900))),
-      "with no weeks to read, the clock is all there is")
+let early = Date(timeIntervalSince1970: 100), late = Date(timeIntervalSince1970: 900)
+check(furtherOn((44, false, early), than: (40, true, late)),
+      "more weeks wins, however old the save and wherever the party is")
+check(furtherOn((44, true, early), than: (44, false, late)),
+      "at the same week, out on an expedition beats still in the Hamlet")
+check(furtherOn((44, false, late), than: (44, false, early)),
+      "and with both in the Hamlet it comes down to the clock")
+check(!furtherOn((nil, nil, early), than: (nil, nil, late)),
+      "with nothing to read, the clock is all there is")
 
 print("2. The Mac game saves again")
 clock += 60
