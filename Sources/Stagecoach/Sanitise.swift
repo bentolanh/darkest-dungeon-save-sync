@@ -48,11 +48,6 @@ enum Sanitise {
     static let removals: [(file: String, object: String, parent: String?, describe: String)] = [
         ("persist.town.json", "circus", "buildings",
          "the Butcher's Circus building in the Hamlet"),
-        // Only the record of adverts shown. The campaign's own list of add-ons —
-        // Crimson Court, Shieldbreaker, Colour of Madness, all of them sold for
-        // the iPad too — is a different object of the same name and is left alone.
-        ("persist.game.json", "dlc", "presented_dlc",
-         "the note that the game once advertised the Butcher's Circus to you"),
     ]
 
     /// The campaign's own list of add-ons, under the save's root. The iPad writes
@@ -90,6 +85,98 @@ enum Sanitise {
             .map { (file: file, field: $0, describe: "a field the newer build added to each hero in \(file)") }
     }
 
+    /// The sanitarium records a trinket against each quirk. Neither iPad save has
+    /// ever recorded a quirk at all, so there is no evidence about whether its
+    /// build knows the field — which is why this is asked for rather than assumed.
+    static let quirkTrinket = (file: "persist.town.json", field: "trinketId")
+
+    /// The add-ons a campaign says it uses live in a `dlc` object at the save's
+    /// root, one numbered entry each. The iPad shows its activation window for
+    /// anything listed there that it does not have, and a campaign asking for an
+    /// add-on the iPad cannot provide is one it cannot open. Trimming the list to
+    /// what a save from the iPad itself asks for is what stops that.
+    static func addOns(in gameFile: URL, under parent: String = "base_root") -> [String] {
+        guard let d = try? Data(contentsOf: gameFile), let s = try? SaveFile(d) else { return [] }
+        return addOns(in: s, under: parent)
+    }
+
+    static func addOns(in s: SaveFile, under parent: String) -> [String] {
+        guard let dlc = s.indexOfObject(named: "dlc", under: parent) else { return [] }
+        var out: [String] = []
+        for entry in s.childObjects(ofObject: s.fields[dlc].object) {
+            if let n = s.fields.indices.first(where: { $0 > entry && s.fields[$0].name == "name" }),
+               let v = s.stringValue(at: n) { out.append(v) }
+        }
+        return out
+    }
+
+    /// Keeps only the named add-ons in the campaign's list, renumbering what is
+    /// left so the entries still run from zero.
+    static func trimAddOns(_ save: inout SaveFile, under parent: String, keeping allowed: Set<String>) -> [String] {
+        guard let dlc = save.indexOfObject(named: "dlc", under: parent) else { return [] }
+        var dropped: [String] = []
+        while true {
+            let entries = save.childObjects(ofObject: save.fields[dlc].object)
+            var removedOne = false
+            for entry in entries {
+                guard let n = save.fields.indices.first(where: { $0 > entry && save.fields[$0].name == "name" }),
+                      let name = save.stringValue(at: n) else { continue }
+                if !allowed.contains(name) {
+                    dropped.append(name)
+                    save.removeObject(at: entry)
+                    removedOne = true
+                    break
+                }
+            }
+            if !removedOne { break }
+        }
+        for (i, entry) in save.childObjects(ofObject: save.fields[dlc].object).enumerated() {
+            save.renameField(at: entry, to: String(i))
+        }
+        return dropped
+    }
+
+    /// Which add-ons the iPad has switched on. Its Activate DLC screen lists all
+    /// six — Musketeer, Crimson Court, Districts, Flagellant, Shieldbreaker,
+    /// Colour of Madness — so every name is one it knows. What matters is not
+    /// whether it knows the name but whether the add-on is enabled there: a
+    /// campaign asking for one that is off cannot be opened, and the import
+    /// screen reads every campaign in the folder, so one such campaign takes the
+    /// whole screen down with it rather than just itself.
+    ///
+    /// The answer is read from a save the iPad wrote rather than assumed. On this
+    /// Mac that comes to Musketeer and Shieldbreaker.
+    static func addOnsEnabledOnTheIPad(reference: URL) -> Set<String>? {
+        let list = addOns(in: reference.appendingPathComponent("persist.game.json"))
+        return list.isEmpty ? nil : Set(list)
+    }
+
+    /// The list of add-ons the game has shown the player keeps everything the
+    /// iPad's own screen offers. Only the Butcher's Circus, which that screen has
+    /// never listed, comes out.
+    static let shownAddOnsToKeep: Set<String> =
+        ["musketeer", "crimson_court", "districts", "flagellant", "shieldbreaker", "color_of_madness"]
+
+    /// Fields the newer build writes inside a hero's own record. Every hero on
+    /// this Mac carries a trinketId; no hero the iPad wrote has ever had one.
+    static let newerInsideHeroes = ["trinketId", "added_buffs", "did_transform",
+                                    "hero_name", "previous_trinket_id", "trinkets_gained_count"]
+
+    /// Opens each hero in the roster and takes those fields out of it.
+    static func cleanHeroes(_ save: inout SaveFile) -> (heroes: Int, removed: Int) {
+        var touched = 0, removed = 0
+        for i in save.fields.indices where save.fields[i].name == "raw_data" {
+            guard var hero = save.embeddedSave(at: i) else { continue }
+            var n = 0
+            for field in newerInsideHeroes { n += hero.removeAll(named: field) }
+            guard n > 0 else { continue }
+            guard hero.inconsistencies().isEmpty else { continue }
+            save.setEmbeddedSave(at: i, to: hero)
+            touched += 1; removed += n
+        }
+        return (touched, removed)
+    }
+
     /// Traces that cannot be lifted out without rewriting a value, and are left in.
     static let tolerated: [(file: String, marker: String, describe: String)] = [
         ("persist.narration.json", "arena",
@@ -101,7 +188,9 @@ enum Sanitise {
     /// file cannot be understood.
     @discardableResult
     static func copy(profile: String, from source: URL, to destination: URL, snapshot: Snapshot,
-                     clearAddOnList: Bool = false, matchIPadBuild: Bool = false) throws -> SanitiseReport {
+                     clearAddOnList: Bool = false, matchIPadBuild: Bool = false,
+                     stripNewerStructures: Bool = true, stripQuirkTrinkets: Bool = false,
+                     keepAddOns: Set<String>? = nil, rename: String? = nil) throws -> SanitiseReport {
         var report = SanitiseReport(profile: profile, estate: CampaignInfo.read(profileDir: source).estate)
         var rewritten: [String: Data] = [:]
 
@@ -148,7 +237,7 @@ enum Sanitise {
             }
         }
 
-        if matchIPadBuild {
+        if matchIPadBuild || stripNewerStructures {
             // Every save file in the campaign gets the iPad's build stamp, and the
             // structures that build never wrote are taken out of the files that
             // carry them.
@@ -161,27 +250,81 @@ enum Sanitise {
                     report.leftAlone.append("\(name) could not be read as a save file, so it keeps its original build stamp")
                     continue
                 }
-                var touched = save.build != iPadBuild
-                save.build = iPadBuild
+                var touched = false
+                if matchIPadBuild, save.build != iPadBuild { save.build = iPadBuild; touched = true }
 
-                for (field, _) in perFile[name] ?? [] {
+                for (field, _) in (stripNewerStructures ? (perFile[name] ?? []) : []) {
                     let n = save.removeAll(named: field)
                     if n > 0 { report.strippedNewer[field, default: 0] += n; touched = true }
                 }
                 guard touched else { continue }
 
                 let out = save.serialized()
-                guard let check = try? SaveFile(out), check.serialized() == out, check.build == iPadBuild else {
+                guard let check = try? SaveFile(out), check.serialized() == out,
+                      !matchIPadBuild || check.build == iPadBuild else {
                     throw SanitiseFailure.rewriteUnverified("\(name): matching the iPad's build did not read back cleanly")
                 }
                 rewritten[name] = out
                 if !report.changedFiles.contains(name) { report.changedFiles.append(name) }
             }
-            report.matchedIPadBuild = true
-            report.removed.append("everything stamped as build \(iPadBuild), the one the iPad writes, instead of \(SaveFile.steamBuildHint)")
+            if matchIPadBuild {
+                report.matchedIPadBuild = true
+                report.removed.append("everything stamped as build \(iPadBuild), the one the iPad writes, instead of \(SaveFile.steamBuildHint)")
+            }
             for (f, n) in report.strippedNewer.sorted(by: { $0.key < $1.key }) {
                 let what = (newerThanIPad.first { $0.field == f }?.describe) ?? "a structure the newer build added"
                 report.removed.append("\(what) — \(f), \(n) place\(n == 1 ? "" : "s")")
+            }
+        }
+
+        if stripNewerStructures, snapshot.files["persist.roster.json"] != nil {
+            let url = source.appendingPathComponent("persist.roster.json")
+            if let data = try? rewritten["persist.roster.json"] ?? Data(contentsOf: url),
+               var save = try? SaveFile(data) {
+                let (heroes, fields) = cleanHeroes(&save)
+                if heroes > 0 {
+                    rewritten["persist.roster.json"] = save.serialized()
+                    report.removed.append("\(fields) fields the newer build added inside \(heroes) hero records")
+                    if !report.changedFiles.contains("persist.roster.json") { report.changedFiles.append("persist.roster.json") }
+                }
+            }
+        }
+
+        if snapshot.files["persist.game.json"] != nil {
+            let url = source.appendingPathComponent("persist.game.json")
+            if let data = try? rewritten["persist.game.json"] ?? Data(contentsOf: url), var save = try? SaveFile(data) {
+                if let allowed = keepAddOns {
+                    let dropped = trimAddOns(&save, under: "base_root", keeping: allowed)
+                    if !dropped.isEmpty {
+                        report.removed.append("the add-ons this campaign asked for that the iPad does not have — \(dropped.joined(separator: ", "))")
+                    }
+                }
+                // The record of which add-ons the game has shown the player is what
+                // tells it the save has already been reconciled with them. Emptying
+                // it makes the game ask again and refuse. Only the Butcher's Circus
+                // comes out; the rest of the list stays exactly as it is.
+                let shownDropped = trimAddOns(&save, under: "presented_dlc", keeping: shownAddOnsToKeep)
+                if !shownDropped.isEmpty {
+                    report.removed.append("the Butcher's Circus from the list of add-ons the game has shown you — \(shownDropped.joined(separator: ", "))")
+                }
+                if let rename, let i = save.fields.firstIndex(where: { $0.name == "estatename" }) {
+                    save.setStringValue(at: i, to: rename)
+                    report.removed.append("the estate renamed to \(rename) so it can be told apart")
+                }
+                rewritten["persist.game.json"] = save.serialized()
+                if !report.changedFiles.contains("persist.game.json") { report.changedFiles.append("persist.game.json") }
+            }
+        }
+
+        if stripQuirkTrinkets, snapshot.files[quirkTrinket.file] != nil {
+            let url = source.appendingPathComponent(quirkTrinket.file)
+            if let data = try? rewritten[quirkTrinket.file] ?? Data(contentsOf: url), var save = try? SaveFile(data) {
+                let n = save.removeAll(named: quirkTrinket.field)
+                if n > 0 {
+                    rewritten[quirkTrinket.file] = save.serialized()
+                    report.removed.append("the trinket recorded against each quirk in the sanitarium — \(quirkTrinket.field), \(n) places")
+                    if !report.changedFiles.contains(quirkTrinket.file) { report.changedFiles.append(quirkTrinket.file) }
+                }
             }
         }
 

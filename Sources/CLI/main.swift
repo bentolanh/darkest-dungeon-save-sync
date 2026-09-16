@@ -138,6 +138,16 @@ case "prepare":
     let profile = args[args.startIndex + 1]
     let clearAddOns = args.contains("--without-add-ons")
     let matchBuild = !args.contains("--keep-build")
+    let stripNewer = !args.contains("--keep-newer")
+    let stripQuirks = args.contains("--strip-quirk-trinkets")
+    var keepAddOns: Set<String>? = nil
+    if let i = args.firstIndex(of: "--keep-add-ons"), args.index(after: i) < args.endIndex {
+        keepAddOns = Set(args[args.index(after: i)].split(separator: ",").map(String.init))
+    }
+    var rename: String? = nil
+    if let i = args.firstIndex(of: "--rename"), args.index(after: i) < args.endIndex { rename = args[args.index(after: i)] }
+    var slot = profile
+    if let i = args.firstIndex(of: "--as"), args.index(after: i) < args.endIndex { slot = args[args.index(after: i)] }
     guard let steam = Paths.detectSteamRemote(), let dropbox = Paths.detectDropboxAppFolder() else {
         print("Steam save folder or Dropbox folder not found"); exit(1)
     }
@@ -145,19 +155,27 @@ case "prepare":
     guard let snap = Snapshot.read(src), !snap.isEmpty else { print("nothing in \(src.path)"); exit(1) }
     do {
         let r = try Sanitise.copy(profile: profile, from: src,
-                                  to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
-                                  clearAddOnList: clearAddOns, matchIPadBuild: matchBuild)
+                                  to: dropbox.appendingPathComponent(slot, isDirectory: true), snapshot: snap,
+                                  clearAddOnList: clearAddOns, matchIPadBuild: matchBuild,
+                                  stripNewerStructures: stripNewer, stripQuirkTrinkets: stripQuirks,
+                                  keepAddOns: keepAddOns, rename: rename)
         var led = Ledger.load()
-        led.preparedForIPad[profile] = snap.digest
-        led.profiles[profile] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),
+        led.preparedForIPad[slot] = snap.digest
+        led.profiles[slot] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),
                                               syncedAt: Date(), lastSource: "mac",
                                               cloudState: led.profiles[profile]?.cloudState ?? "uploaded")
         led.save()
-        print("prepared \(r.estate ?? profile) for the iPad")
+        print("prepared \(r.estate ?? profile) into \(slot) for the iPad")
         for x in r.removed { print("  removed: \(x)") }
         for x in r.leftAlone { print("  left in: \(x)") }
         print("  files rewritten: \(r.changedFiles.joined(separator: ", "))")
     } catch { print("failed: \(error)"); exit(1) }
+
+case "add-ons":
+    let dir = args.count >= 2 ? URL(fileURLWithPath: args[args.startIndex + 1])
+                              : (Paths.detectSteamRemote() ?? Paths.home).appendingPathComponent("profile_1")
+    let g = dir.appendingPathComponent("persist.game.json")
+    print("\(dir.lastPathComponent): asks for \(Sanitise.addOns(in: g)), has been shown \(Sanitise.addOns(in: g, under: "presented_dlc"))")
 
 case "sync":
     let dropbox = Paths.detectDropboxAppFolder()

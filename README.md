@@ -97,6 +97,50 @@ enough. A number read wrongly and written back unchanged round-trips perfectly
 while describing a tree that no longer exists, and that is what once put a
 corrupted copy in front of the iPad.
 
+### A hero is a save file of its own
+
+The roster does not hold heroes as rows. Each one is a whole save file in its
+own right, carried inside a field as padding, a four-byte length, and then the
+file. Everything the game has ever learned to record about a hero lives in
+there — which means it is out of reach of every edit made to the file that
+holds it, and a pass over the roster can come away reporting success having
+changed nothing that matters.
+
+That is where the last of it was hiding. Every one of the twenty-six heroes on
+this Mac carries a `trinketId`; no hero the iPad has written has ever had one.
+Eight of them also carry the same five fields the newer build added elsewhere.
+Preparing a copy now opens each hero, takes those out, and puts it back with its
+length corrected, leaving the hero's name, class and everything else as it was.
+
+### Two lists, not one
+
+A campaign keeps two records of add-ons and they do different jobs. The one at
+the save's root says which add-ons the campaign *uses*. A second, `presented_dlc`,
+says which the game has already *shown* the player. The second is what tells the
+game this save has been reconciled with them, and emptying it makes the game ask
+again and then refuse to open the campaign at all — "Required DLC is missing".
+
+The first rule this tool ever had emptied that list, to be rid of a reference to
+the Butcher's Circus sitting in it. That was the wrong shape of fix and it
+outlived several rounds of looking elsewhere. Only the Butcher's Circus entry
+comes out now; everything else the game has shown you stays where it is.
+
+### The add-ons a campaign asks for
+
+This is the one that matters most. A campaign records which add-ons it uses in a
+`dlc` object at the save's root, and the iPad shows its activation window for
+anything listed there that it does not have. A campaign asking for an add-on the
+iPad cannot provide is one it cannot open.
+
+The two sides differ because they were bought separately. On this Mac the
+campaign asks for Musketeer, Crimson Court, districts, flagellant, Shieldbreaker
+and Colour of Madness. The same campaign on the iPad asks only for Musketeer and
+Shieldbreaker. So preparing a copy trims that list to what a save written by the
+iPad itself asks for, and renumbers what remains so the entries still run from
+zero. The heroes stay: the iPad's own campaign holds three Flagellants while
+asking for no Crimson Court, because a hero lives in the roster rather than
+behind the list.
+
 **Known remaining difference.** The Mac's sanitarium records a `trinketId` on
 each quirk. Neither iPad save has ever written a quirk entry at all, so there
 is no evidence about whether its build knows that field. It is left in rather

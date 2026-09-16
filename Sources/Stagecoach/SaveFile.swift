@@ -106,11 +106,32 @@ struct SaveFile {
         // Where the data section will begin, so each field can be placed to keep
         // its value on the same footing against a four-byte boundary as before.
         let dataStart = 64 + objects.count * 16 + fields.count * 12
-        var data: [UInt8] = [], offsets: [Int] = []
-        for f in fields {
+
+        // An object has no value, so the bytes that make up a field are its name
+        // and nothing else, and its position is free. A value field that has to be
+        // nudged back onto its boundary therefore puts the filler *before* any run
+        // of objects standing in front of it, never between an object's name and
+        // whatever follows. In a save the game wrote, no object has a single byte
+        // to its name beyond the name itself, and a copy should read the same way.
+        var filler = [Int](repeating: 0, count: fields.count)
+        var pos = 0
+        for (i, f) in fields.enumerated() {
             let nameLength = f.name.utf8.count + 1
-            let want = ((f.align - (dataStart + data.count + nameLength)) % 4 + 4) % 4
-            data += [UInt8](repeating: 0, count: want)
+            if !f.isObject {
+                let want = ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
+                if want > 0 {
+                    var j = i
+                    while j > 0, fields[j - 1].isObject { j -= 1 }
+                    filler[j] += want
+                    pos += want
+                }
+            }
+            pos += nameLength + f.value.count
+        }
+
+        var data: [UInt8] = [], offsets: [Int] = []
+        for (i, f) in fields.enumerated() {
+            data += [UInt8](repeating: 0, count: filler[i])
             offsets.append(data.count)
             data += Array(f.name.utf8); data.append(0); data += f.value
         }
@@ -257,6 +278,74 @@ struct SaveFile {
         return true
     }
 
+    /// A field holding a string: four bytes of length, the characters, a zero.
+    /// Leading padding is skipped using the footing the field was read with.
+    func stringValue(at field: Int) -> String? {
+        guard field < fields.count else { return nil }
+        let f = fields[field]
+        let pad = (4 - f.align) % 4
+        let v = f.value
+        guard v.count >= pad + 4 else { return nil }
+        let n = Int(v[pad]) | Int(v[pad+1]) << 8 | Int(v[pad+2]) << 16 | Int(v[pad+3]) << 24
+        guard n >= 1, pad + 4 + n <= v.count else { return nil }
+        return String(bytes: v[(pad + 4)..<(pad + 4 + n - 1)], encoding: .utf8)
+    }
+
+    /// Replaces a string field's text, keeping whatever padding stood before it.
+    mutating func setStringValue(at field: Int, to text: String) {
+        guard field < fields.count, stringValue(at: field) != nil else { return }
+        let pad = (4 - fields[field].align) % 4
+        let chars = Array(text.utf8)
+        let n = chars.count + 1
+        var v = Array(fields[field].value[0..<pad])
+        v += [UInt8(n & 0xff), UInt8((n >> 8) & 0xff), UInt8((n >> 16) & 0xff), UInt8((n >> 24) & 0xff)]
+        v += chars; v.append(0)
+        fields[field].value = v
+    }
+
+    /// A hero is not a row in the roster: it is a whole save file of its own,
+    /// carried inside a field as padding, a four-byte length, then the file.
+    /// Anything the game learned to write about a hero lives in there, out of
+    /// reach of every edit made to the file that holds it.
+    func embeddedSave(at field: Int) -> SaveFile? {
+        guard field < fields.count else { return nil }
+        let f = fields[field]
+        let pad = (4 - f.align) % 4
+        let v = f.value
+        guard v.count >= pad + 4 else { return nil }
+        let n = Int(v[pad]) | Int(v[pad+1]) << 8 | Int(v[pad+2]) << 16 | Int(v[pad+3]) << 24
+        guard n > 8, pad + 4 + n <= v.count else { return nil }
+        return try? SaveFile(Data(v[(pad + 4)..<(pad + 4 + n)]))
+    }
+
+    /// Puts an edited hero back, with its length corrected.
+    mutating func setEmbeddedSave(at field: Int, to inner: SaveFile) {
+        guard field < fields.count else { return }
+        let pad = (4 - fields[field].align) % 4
+        guard fields[field].value.count >= pad + 4 else { return }
+        let bytes = [UInt8](inner.serialized())
+        var v = Array(fields[field].value[0..<pad])
+        let n = bytes.count
+        v += [UInt8(n & 0xff), UInt8((n >> 8) & 0xff), UInt8((n >> 16) & 0xff), UInt8((n >> 24) & 0xff)]
+        v += bytes
+        fields[field].value = v
+    }
+
+    /// Renames a field. Only a name of the same length is allowed, so that nothing
+    /// else in the file has to move.
+    @discardableResult
+    mutating func renameField(at field: Int, to name: String) -> Bool {
+        guard field < fields.count, name.utf8.count == fields[field].name.utf8.count else { return false }
+        fields[field].name = name
+        return true
+    }
+
+    /// The object fields sitting directly inside a given object.
+    func childObjects(ofObject object: Int) -> [Int] {
+        fields.indices.filter { fields[$0].isObject && fields[$0].object < objects.count
+            && objects[fields[$0].object].parent == object && fields[$0].object != object }
+    }
+
     /// Rebuilds the object tree from the field list and checks the file agrees
     /// with itself. Round-tripping is not enough: a wrong number written back
     /// exactly as it was read still round-trips. This is what catches an edit
@@ -294,10 +383,13 @@ struct SaveFile {
         var pos = 0
         for f in fields {
             let nameLength = f.name.utf8.count + 1
-            let want = ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
-            pos += want
-            if (dataStart + pos + nameLength) % 4 != f.align {
-                problems.append("'\(f.name)' no longer stands where its value expects")
+            if !f.isObject {
+                pos += ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
+                if (dataStart + pos + nameLength) % 4 != f.align {
+                    problems.append("'\(f.name)' no longer stands where its value expects")
+                }
+            } else if !f.value.isEmpty {
+                problems.append("the object '\(f.name)' has bytes of its own, which no object in a save the game wrote ever has")
             }
             pos += nameLength + f.value.count
         }

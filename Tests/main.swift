@@ -518,13 +518,68 @@ let afterAlign = valueStarts(alignOut)
 check(Set(beforeAlign).count <= 4 && afterAlign.allSatisfy { $0 == beforeAlign[0] || true }, "alignments are recorded")
 let src = try! SaveFile(town), dst = try! SaveFile(alignOut)
 var kept = 0
-for f in dst.fields {
-    guard let o = src.fields.first(where: { $0.name == f.name }) else { continue }
+for f in dst.fields where !f.isObject {
+    // Only values have a footing to keep. An object is just a name, so it is free
+    // to move, and moving it is how padding is kept out of its extent.
+    guard let o = src.fields.first(where: { $0.name == f.name && !$0.isObject }) else { continue }
     check(f.align == o.align, "'\(f.name)' keeps the footing it had")
     kept += 1
 }
-check(kept >= 3, "several surviving fields were compared")
+check(kept >= 1, "a surviving value was compared")
 check(dst.serialized() == alignOut, "and the realigned file is stable")
+
+print("7i. A hero is a save file of its own, and is cleaned inside")
+// A hero record, carried inside a roster field as padding, a length, then a file.
+let heroInner = dsonFile(
+    objects: [(0, 0, 3, 3)],
+    fields: [("base_root", true, 0, []), ("name", false, 0, [1, 0, 0, 0]),
+             ("trinketId", false, 0, [9, 0, 0, 0]), ("current_hp", false, 0, [4, 0, 0, 0])])
+// Build the carrier with room for the hero, then let the writer place it, so the
+// padding is whatever this field's footing actually calls for.
+var roster = try! SaveFile(dsonFile(
+    objects: [(0, 0, 2, 2)],
+    fields: [("base_root", true, 0, []), ("version", false, 0, [1, 0, 0, 0]),
+             ("raw_data", false, 0, [UInt8](repeating: 0, count: 16))]))
+roster.setEmbeddedSave(at: 2, to: try! SaveFile(heroInner))
+roster = try! SaveFile(roster.serialized())
+let hero = roster.embeddedSave(at: 2)
+check(hero != nil, "the hero inside the roster is found and read")
+check(hero?.fields.map(\.name) == ["base_root", "name", "trinketId", "current_hp"], "with its own fields")
+let (touchedHeroes, removedFields) = Sanitise.cleanHeroes(&roster)
+check(touchedHeroes == 1 && removedFields == 1, "one field comes out of one hero")
+let rosterOut = roster.serialized()
+let rosterBack = try! SaveFile(rosterOut)
+check(rosterBack.serialized() == rosterOut && rosterBack.inconsistencies().isEmpty, "the roster still holds together")
+let heroBack = rosterBack.embeddedSave(at: 2)
+check(heroBack?.fields.map(\.name) == ["base_root", "name", "current_hp"], "the hero lost only that field")
+check(heroBack?.inconsistencies().isEmpty == true, "and holds together itself")
+check(heroBack?.fields.first(where: { $0.name == "current_hp" })?.value.prefix(4) == [4, 0, 0, 0], "its other values are untouched")
+
+// The iPad's own screen lists all six add-ons, so every name is one it knows;
+// the Butcher's Circus is the only one it has never offered.
+check(Sanitise.shownAddOnsToKeep.contains("districts") && Sanitise.shownAddOnsToKeep.contains("flagellant"),
+      "Districts and Flagellant stay in the list of add-ons already shown")
+check(!Sanitise.shownAddOnsToKeep.contains("arena_mp"), "the Butcher's Circus does not")
+// Which add-ons a copy may ask for is read from a save the iPad wrote, not assumed.
+let refDir = dropbox.appendingPathComponent("reference_profile")
+makeCampaign(refDir, estate: "Ref", savedAt: "2026-09-16 09:00:00", roster: "r", at: clock)
+check(Sanitise.addOnsEnabledOnTheIPad(reference: refDir) == nil,
+      "a reference with no add-on list of its own tells us nothing, and is not guessed at")
+try? fm.removeItem(at: refDir)
+
+// No object may come out of an edit carrying bytes of its own.
+func objectsWithBytes(_ d: Data) -> Int {
+    (try! SaveFile(d)).fields.filter { $0.isObject && !$0.value.isEmpty }.count
+}
+check(objectsWithBytes(town) == 0, "a save the game wrote has no such object")
+var padTest = try! SaveFile(gameLike)
+check(padTest.removeObject(named: "dlc", under: "presented_dlc"), "remove something ahead of an object")
+let padOut = padTest.serialized()
+check(objectsWithBytes(padOut) == 0, "and none appears after the edit")
+check((try! SaveFile(padOut)).inconsistencies().isEmpty, "the result passes its own check")
+var padTest2 = try! SaveFile(town)
+check(padTest2.removeObject(named: "circus", under: "buildings"), "remove an object from the Hamlet")
+check(objectsWithBytes(padTest2.serialized()) == 0, "still none")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)
