@@ -136,29 +136,10 @@ case "codec-check":
     if failed > 0 { exit(1) }
 
 case "prepare":
-    guard args.count >= 2 else { print("usage: stagecoach-cli prepare profile_N [--without-add-ons]"); exit(2) }
+    // Publishes a copy of one campaign for the iPad: the two edits, and a name
+    // of your choosing so several copies of one campaign can be told apart.
+    guard args.count >= 2 else { print("usage: stagecoach-cli prepare profile_N [--as slot] [--rename name]"); exit(2) }
     let profile = args[args.startIndex + 1]
-    let clearAddOns = args.contains("--without-add-ons")
-    let matchBuild = !args.contains("--keep-build")
-    let stripNewer = args.contains("--strip-add-on-content")
-    let stripCircus = args.contains("--strip-circus")
-    var knownTrees: Set<[UInt8]>? = nil
-    if let i = args.firstIndex(of: "--trim-upgrades-like"), args.index(after: i) < args.endIndex {
-        knownTrees = Sanitise.upgradeTrees(in: URL(fileURLWithPath: args[args.index(after: i)], isDirectory: true))
-    }
-    var stripNewerIn: Set<String>? = nil
-    if let i = args.firstIndex(of: "--strip-newer-in"), args.index(after: i) < args.endIndex {
-        stripNewerIn = Set(args[args.index(after: i)].split(separator: ",").map(String.init))
-    }
-    let stripQuirks = args.contains("--strip-quirk-trinkets")
-    var keepAddOns: Set<String>? = nil
-    if let i = args.firstIndex(of: "--keep-add-ons"), args.index(after: i) < args.endIndex {
-        keepAddOns = Set(args[args.index(after: i)].split(separator: ",").map(String.init))
-    }
-    var stamps: [String: Int] = [:]
-    if let i = args.firstIndex(of: "--like"), args.index(after: i) < args.endIndex {
-        stamps = Sanitise.buildStamps(reference: URL(fileURLWithPath: args[args.index(after: i)], isDirectory: true))
-    }
     var rename: String? = nil
     if let i = args.firstIndex(of: "--rename"), args.index(after: i) < args.endIndex { rename = args[args.index(after: i)] }
     var slot = profile
@@ -170,22 +151,38 @@ case "prepare":
     guard let snap = Snapshot.read(src), !snap.isEmpty else { print("nothing in \(src.path)"); exit(1) }
     do {
         let r = try Sanitise.copy(profile: profile, from: src,
-                                  to: dropbox.appendingPathComponent(slot, isDirectory: true), snapshot: snap,
-                                  clearAddOnList: clearAddOns, matchIPadBuild: matchBuild,
-                                  stripNewerStructures: stripNewer, stripCircus: stripCircus,
-                                  stripNewerIn: stripNewerIn, knownUpgradeTrees: knownTrees,
-                                  stripQuirkTrinkets: stripQuirks,
-                                  keepAddOns: keepAddOns, rename: rename, buildStamps: stamps)
+                                  to: dropbox.appendingPathComponent(slot, isDirectory: true),
+                                  snapshot: snap, rename: rename)
         var led = Ledger.load()
-        led.preparedForIPad[slot] = snap.digest
+        led.publishedFrom[slot] = snap.digest
         led.profiles[slot] = ProfileRecord(syncedDigest: snap.digest, syncedSaveTime: saveTime(of: src, snapshot: snap),
-                                              syncedAt: Date(), lastSource: "mac",
-                                              cloudState: led.profiles[profile]?.cloudState ?? "uploaded")
+                                           syncedAt: Date(), lastSource: "mac",
+                                           cloudState: led.profiles[profile]?.cloudState ?? "uploaded")
         led.save()
-        print("prepared \(r.estate ?? profile) into \(slot) for the iPad")
+        print("published \(r.estate ?? profile) into \(slot) for the iPad")
         for x in r.removed { print("  removed: \(x)") }
-        for x in r.leftAlone { print("  left in: \(x)") }
-        print("  files rewritten: \(r.changedFiles.joined(separator: ", "))")
+        print("  files rewritten: \(r.changedFiles.isEmpty ? "none" : r.changedFiles.joined(separator: ", "))")
+    } catch { print("failed: \(error)"); exit(1) }
+
+case "rename":
+    // Renames the estate in a campaign folder, in place. Several copies of one
+    // campaign are indistinguishable in the import list otherwise.
+    guard args.count >= 3 else { print("usage: stagecoach-cli rename <profile dir> <new name>"); exit(2) }
+    let dir = URL(fileURLWithPath: args[args.startIndex + 1], isDirectory: true)
+    let newName = args[args.startIndex + 2]
+    let gameFile = dir.appendingPathComponent("persist.game.json")
+    do {
+        var save = try SaveFile(try Data(contentsOf: gameFile))
+        guard let i = save.fields.firstIndex(where: { $0.name == "estatename" }),
+              let old = save.stringValue(at: i) else { print("no estate name in \(gameFile.path)"); exit(1) }
+        save.setStringValue(at: i, to: newName)
+        let out = save.serialized()
+        guard let check = try? SaveFile(out), check.serialized() == out, check.inconsistencies().isEmpty,
+              check.stringValue(at: i) == newName else {
+            print("the rename did not read back cleanly; nothing written"); exit(1)
+        }
+        try out.write(to: gameFile)
+        print("\(dir.lastPathComponent): \(old) -> \(newName)")
     } catch { print("failed: \(error)"); exit(1) }
 
 case "add-ons":

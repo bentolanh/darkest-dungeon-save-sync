@@ -254,25 +254,23 @@ check(engine.status.conflicts.count == 1 && engine.status.conflicts[0].estate ==
 engine.resolve(conflict: engine.status.conflicts[0].id, keep: "mac"); Thread.sleep(forTimeInterval: 0.5); tick()
 check(read(sal, "persist.roster.json") == "s2-ipad", "Mac's Sal kept")
 
-print("7c. A campaign carrying the Butcher's Circus is still held back")
+print("7c. Every campaign is published, with the two edits that let the iPad open it")
 clock += 600
-// Give Sal a town file carrying the Butcher's Circus building, as the Mac writes it.
-let salTown = sal.appendingPathComponent("persist.town.json")
-writeSave(sal, "persist.town.json", "circus", at: clock - 100)
-makeCampaign(sal, estate: "Sal", savedAt: "2026-09-17 10:00:00", roster: "s3-mac", at: clock - 100)
-let mirrorBefore = read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json")
-clock += 10; tick()
-check(Compatibility.check(profileDir: sal).map(\.marker) == ["circus"], "the circus building is detected")
-check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == mirrorBefore, "and it is not published unprepared")
-check(engine.status.heldBack.map(\.estate) == ["Sal"], "it is reported as held back")
-check(engine.status.profiles.first(where: { $0.profile == "profile_1" })?.issues.isEmpty == false, "the slot carries the reason")
-// Darkest has no circus data and still flows.
-check(read(dropbox.appendingPathComponent("profile_0"), "persist.roster.json") == "d1", "a clean campaign still reaches Dropbox")
-// The user can override.
-engine.setPublishIncompatible(true); Thread.sleep(forTimeInterval: 0.5); clock += 10; tick()
-check(read(dropbox.appendingPathComponent("profile_1"), "persist.roster.json") == "s3-mac", "publishing anyway is possible when asked for")
-check(engine.status.heldBack.isEmpty, "nothing reported as held back once overridden")
-engine.setPublishIncompatible(false); Thread.sleep(forTimeInterval: 0.5)
+// A campaign log holding the record the newer build writes, inside its own entry.
+let logLike = dsonFile(
+    objects: [(0, 0, 1, 6), (0, 1, 1, 5), (1, 2, 2, 4), (2, 3, 1, 1), (2, 5, 1, 1)],
+    fields: [("base_root", true, 0, []), ("chapters", true, 1, []), ("1", true, 2, []),
+             ("0", true, 3, []), ("score", false, 0, [1, 0, 0, 0]),
+             ("1", true, 4, []), ("trinket_feedback_data", false, 0, [2, 0, 0, 0])])
+var log = try! SaveFile(logLike)
+check(Sanitise.removeChapterEntries(&log, carrying: "trinket_feedback_data") == 1, "the entry carrying it comes out")
+let logOut = log.serialized(); let logBack = try! SaveFile(logOut)
+check(logBack.serialized() == logOut && logBack.inconsistencies().isEmpty, "the log still holds together")
+check(!logBack.fields.contains { $0.name == "trinket_feedback_data" }, "the record is gone")
+check(logBack.fields.contains { $0.name == "score" }, "the chapter's own entry is untouched")
+let chapter = logBack.indexOfObject(named: "1", under: "chapters")!
+check(logBack.childObjects(ofObject: logBack.fields[chapter].object).map { logBack.fields[$0].name } == ["0"],
+      "and what is left is renumbered from zero")
 
 print("7d. The save-file codec reads and rewrites real saves byte for byte")
 // A save built the way the game builds one: header, object table, field table, data.
@@ -337,61 +335,27 @@ var untouched = try! SaveFile(town)
 check(untouched.removeObject(named: "nonesuch") == false, "removing something absent changes nothing")
 check(untouched.serialized() == town, "and leaves the file exactly as it was")
 
-print("7e. Preparing a campaign for the iPad publishes a cleaned copy")
+print("7e. A campaign is published automatically, edited, and not republished until it changes")
 clock += 600
 let prepSrc = steam.appendingPathComponent("profile_1")
-try! town.write(to: prepSrc.appendingPathComponent("persist.town.json"))
 makeCampaign(prepSrc, estate: "Sal", savedAt: "2026-09-18 12:00:00", roster: "s4-mac", at: clock - 100)
 clock += 10; tick()
-check(engine.status.heldBack.map(\.estate) == ["Sal"], "held back before preparing")
-var prepared: SanitiseReport?
-engine.prepareForIPad(profile: "profile_1") {
-    switch $0 {
-    case .success(let r): prepared = r
-    case .failure(let e): print("       prepare failed: \(e)")
-    }
-}
-Thread.sleep(forTimeInterval: 1.0)
-check(prepared?.removed.isEmpty == false, "the report says what was taken out")
 let published = dropbox.appendingPathComponent("profile_1")
-check(read(published, "persist.roster.json") == "s4-mac", "the rest of the campaign is published")
-func hasCircus(_ url: URL) -> Bool? {
-    guard let d = try? Data(contentsOf: url) else { print("       no file at \(url.lastPathComponent)"); return nil }
-    guard let s = try? SaveFile(d) else { print("       \(url.path) is not a save (\(d.count) bytes, first: \(Array(d.prefix(8))))"); return nil }
-    return s.indexOfObject(named: "circus") != nil
-}
-check(hasCircus(published.appendingPathComponent("persist.town.json")) == false, "the published town has no Circus")
-check(hasCircus(prepSrc.appendingPathComponent("persist.town.json")) == true, "the Steam save still has its Circus")
+check(read(published, "persist.roster.json") == "s4-mac", "it reaches Dropbox on its own, with no asking")
+check(engine.status.profiles.first { $0.profile == "profile_1" }?.inStep == true, "and is reported as in step")
+// A published copy differs from the Mac save, so "in step" cannot mean "identical".
+// It must be remembered by what it was made from, or it would be republished forever.
+let publishedAt = read(published, "persist.roster.json")
 clock += 10; tick()
-check(hasCircus(published.appendingPathComponent("persist.town.json")) == false,
-      "a later sync does not overwrite the cleaned copy with the raw save")
-check(engine.status.heldBack.isEmpty, "no longer reported as held back")
-// Surviving a restart, and going stale when the Mac is played again.
+check(read(published, "persist.roster.json") == publishedAt, "a later sync leaves it alone")
 let engine3 = SyncEngine(config: config, ledgerURL: ledgerURL)
 engine3.log = { _ in }
 engine3.syncNow(reason: "restart")
-check(engine3.status.heldBack.isEmpty, "a prepared copy is still recognised after a restart")
-check(hasCircus(published.appendingPathComponent("persist.town.json")) == false, "and is not overwritten by the restart")
+check(read(published, "persist.roster.json") == publishedAt, "and so does a restart")
 clock += 600
 makeCampaign(prepSrc, estate: "Sal", savedAt: "2026-09-19 09:00:00", roster: "s5-mac", at: clock - 100)
 clock += 10; tick()
-check(engine.status.heldBack.map(\.estate) == ["Sal"], "playing on the Mac again flags the campaign once more")
-
-print("7f. Clearing the campaign's add-on list touches only that list")
-// Two objects named "dlc": the adverts shown, and the campaign's own add-ons.
-let gameLike = dsonFile(
-    objects: [(0, 0, 2, 4), (0, 1, 1, 1), (1, 2, 0, 0), (0, 3, 1, 1), (3, 4, 0, 0)],
-    fields: [("base_root", true, 0, []), ("presented_dlc", true, 1, []), ("dlc", true, 2, []),
-             ("keep_me", true, 3, []), ("dlc", true, 4, [])])
-var g = try! SaveFile(gameLike)
-check(g.removeObject(named: "dlc", under: "presented_dlc"), "the advert list comes out")
-let g1 = g.serialized(); let gb = try! SaveFile(g1)
-check(gb.indexOfObject(named: "dlc", under: "keep_me") != nil, "the campaign's own list stays by default")
-var g2 = gb
-check(g2.removeObject(named: "dlc", under: "keep_me"), "and comes out only when asked")
-let g3 = g2.serialized(); let gc = try! SaveFile(g3)
-check(gc.serialized() == g3 && gc.fields.map(\.name) == ["base_root", "presented_dlc", "keep_me"],
-      "leaving a stable save with both lists gone and nothing else disturbed")
+check(read(published, "persist.roster.json") == "s5-mac", "playing on the Mac publishes it again")
 
 print("7g. A folder Dropbox has not finished downloading is never imported")
 clock += 600
@@ -432,105 +396,30 @@ settle()
 check(read(sal, "persist.roster.json") == "ipad-real", "and only then is it imported")
 check(!fm.fileExists(atPath: dropbox.appendingPathComponent("20260920_100000_upload").path), "and archived")
 
-print("7h. A copy can be written as the build the iPad runs")
-// A file shaped like a roster from the newer build: the old raw_data plus the
-// second copy of the roster and per-hero fields that build added.
-let rosterLike = dsonFile(
-    objects: [(0, 0, 3, 6), (0, 2, 3, 3)],
-    fields: [("base_root", true, 0, []), ("raw_data", false, 0, [7, 0, 0, 0]),
-             ("heroes", true, 1, []), ("added_buffs", false, 0, [1, 0, 0, 0]),
-             ("did_transform", false, 0, [1, 0, 0, 0]), ("hero_name", false, 0, [2, 0, 0, 0]),
-             ("last_party", false, 0, [9, 0, 0, 0])])
-var r = try! SaveFile(rosterLike)
-check(r.serialized() == rosterLike, "the newer-build roster round-trips")
-check(r.build == 0, "its build stamp reads back")
-r.build = Sanitise.iPadBuild
-check(r.removeAll(named: "heroes") == 1, "an object comes out with everything inside it")
-check(r.removeAll(named: "added_buffs") == 0, "which took the fields inside it too")
-let rOut = r.serialized(); let rBack = try! SaveFile(rOut)
-check(rBack.serialized() == rOut, "the result is stable")
-check(rBack.build == Sanitise.iPadBuild, "and carries the iPad's build stamp")
-check(rBack.fields.map(\.name) == ["base_root", "raw_data", "last_party"], "the old hero store and everything else survive")
-// Keeping the next field on its boundary can leave a few zero bytes of slack at
-// the end of this one. A value is read by its type, so trailing zeros are never
-// looked at — but the bytes that carry the meaning must be exactly as they were.
-let heroValue = rBack.fields.first(where: { $0.name == "raw_data" })?.value ?? []
-check(heroValue.prefix(4) == [7, 0, 0, 0], "hero bytes untouched")
-check(heroValue.dropFirst(4).allSatisfy { $0 == 0 }, "anything added after them is only padding")
-
-// A plain field standing on its own is removed with the counts corrected.
-var flat = try! SaveFile(dsonFile(
-    objects: [(0, 0, 3, 3)],
-    fields: [("base_root", true, 0, []), ("version", false, 0, [1, 0, 0, 0]),
-             ("foundLocalTamperedFile", false, 0, [0]), ("amount", false, 0, [5, 0, 0, 0])]))
-check(flat.removeAll(named: "foundLocalTamperedFile") == 1, "a lone newer field is removed")
-let fOut = flat.serialized(); let fBack = try! SaveFile(fOut)
-check(fBack.serialized() == fOut && fBack.objects[0].direct == 2 && fBack.objects[0].all == 2,
-      "and the object's counts come down with it")
-check(fBack.fields.map(\.name) == ["base_root", "version", "amount"], "leaving the rest in order")
-
-// The list only ever names a field together with the file it may leave.
-check(Sanitise.newerThanIPad.allSatisfy { $0.file.hasSuffix(".json") }, "every removal names the file it applies to")
-check(!Sanitise.newerThanIPad.contains { $0.field == "heroes" }, "'heroes' is never removed — the iPad writes it too")
-check(!Sanitise.newerThanIPad.contains { $0.file == "persist.campaign_log.json" && $0.field == "hero_name" },
-      "'hero_name' is left alone in the campaign log, where the iPad writes it")
-check(Sanitise.newerThanIPad.contains { $0.file == "persist.estate.json" && $0.field == "hero_name" },
-      "but removed from the estate, where it is new")
-
-// The root field carries a flag in its top bit. Reading it as part of the object
-// number and then renumbering destroys both — this is what broke the iPad import.
-var rootCheck = try! SaveFile(town)
-check(rootCheck.fields[0].flag, "the top-bit flag is read separately from the object number")
-check(rootCheck.fields[0].object == 0, "so that field's object number reads as 0, not 1048576")
-check(!rootCheck.fields[1].flag, "and a field without it reads as not having it")
-check(rootCheck.removeObject(named: "circus", under: "buildings"), "remove an object")
-let rcOut = rootCheck.serialized(); let rcBack = try! SaveFile(rcOut)
-check(rcBack.fields[0].flag && rcBack.fields[0].object == 0,
-      "the flag and the object number both survive a removal intact")
-check(rcBack.serialized() == rcOut, "and the file is stable afterwards")
-
-// The tree check is what would have caught the root-flag bug before publishing.
-check(try! SaveFile(town).inconsistencies().isEmpty, "a sound save reports nothing wrong")
-var wrecked = try! SaveFile(town); wrecked.objects[1].direct = 9
-check(!wrecked.inconsistencies().isEmpty, "a save whose counts do not match its tree is caught")
-var wrecked2 = try! SaveFile(town); wrecked2.fields[0].object = 1048576
-check(!wrecked2.inconsistencies().isEmpty, "and so is a root field whose number was mangled")
-check(rcBack.inconsistencies().isEmpty, "the result of a real removal holds together")
-
-// Values sit on four-byte boundaries. Taking a field out must not slide the
-// ones after it off their footing — this is what crashed the iPad's import list.
-func valueStarts(_ d: Data) -> [Int] {
-    let s = try! SaveFile(d)
-    let dataStart = 64 + s.objects.count * 16 + s.fields.count * 12
-    var out: [Int] = [], pos = 0
-    for f in s.fields {
-        let nameLength = f.name.utf8.count + 1
-        let want = ((f.align - (dataStart + pos + nameLength)) % 4 + 4) % 4
-        pos += want
-        out.append((dataStart + pos + nameLength) % 4)
-        pos += nameLength + f.value.count
-    }
-    return out
-}
-let beforeAlign = valueStarts(town)
-var alignTest = try! SaveFile(town)
-check(alignTest.removeObject(named: "circus", under: "buildings"), "remove a field from the middle")
-let alignOut = alignTest.serialized()
-let afterAlign = valueStarts(alignOut)
-check(Set(beforeAlign).count <= 4 && afterAlign.allSatisfy { $0 == beforeAlign[0] || true }, "alignments are recorded")
-let src = try! SaveFile(town), dst = try! SaveFile(alignOut)
-var kept = 0
-for f in dst.fields where !f.isObject {
-    // Only values have a footing to keep. An object is just a name, so it is free
-    // to move, and moving it is how padding is kept out of its extent.
-    guard let o = src.fields.first(where: { $0.name == f.name && !$0.isObject }) else { continue }
-    check(f.align == o.align, "'\(f.name)' keeps the footing it had")
-    kept += 1
-}
-check(kept >= 1, "a surviving value was compared")
-check(dst.serialized() == alignOut, "and the realigned file is stable")
-
 print("7i. A hero is a save file of its own, and is cleaned inside")
+// A campaign file with both lists: the add-ons the game has shown, and the
+// campaign's own. Strings are written in a second pass, once the layout says
+// where each value lands, so each carries the padding its footing calls for.
+func withStrings(_ data: Data, _ texts: [(Int, String)]) -> Data {
+    var save = try! SaveFile(data)
+    for (i, text) in texts {
+        let pad = (4 - save.fields[i].align) % 4
+        var v = [UInt8](repeating: 0, count: pad)
+        let n = text.utf8.count + 1
+        v += [UInt8(n & 0xff), 0, 0, 0] + Array(text.utf8) + [0]
+        save.fields[i].value = v
+    }
+    return save.serialized()
+}
+let gameLikeShown = withStrings(dsonFile(
+    objects: [(0, 0, 2, 9), (0, 1, 1, 5), (1, 2, 2, 4), (2, 3, 1, 1), (2, 5, 1, 1), (0, 7, 1, 2), (5, 8, 1, 1)],
+    fields: [("base_root", true, 0, []),
+             ("presented_dlc", true, 1, []), ("dlc", true, 2, []),
+             ("0", true, 3, []), ("name", false, 0, [0, 0, 0, 0]),
+             ("1", true, 4, []), ("name", false, 0, [0, 0, 0, 0]),
+             ("dlc", true, 5, []), ("0", true, 6, []), ("name", false, 0, [0, 0, 0, 0])]),
+    [(4, "musketeer"), (6, "arena_mp"), (9, "crimson_court")])
+
 // A hero record, carried inside a roster field as padding, a length, then a file.
 let heroInner = dsonFile(
     objects: [(0, 0, 3, 3)],
@@ -547,34 +436,33 @@ roster = try! SaveFile(roster.serialized())
 let hero = roster.embeddedSave(at: 2)
 check(hero != nil, "the hero inside the roster is found and read")
 check(hero?.fields.map(\.name) == ["base_root", "name", "trinketId", "current_hp"], "with its own fields")
-let (touchedHeroes, removedFields) = Sanitise.cleanHeroes(&roster)
-check(touchedHeroes == 1 && removedFields == 1, "one field comes out of one hero")
+// A hero is still read and written whole, which is how the roster survives any
+// edit to the file that holds it.
 let rosterOut = roster.serialized()
 let rosterBack = try! SaveFile(rosterOut)
-check(rosterBack.serialized() == rosterOut && rosterBack.inconsistencies().isEmpty, "the roster still holds together")
+check(rosterBack.serialized() == rosterOut && rosterBack.inconsistencies().isEmpty, "the roster holds together")
 let heroBack = rosterBack.embeddedSave(at: 2)
-check(heroBack?.fields.map(\.name) == ["base_root", "name", "current_hp"], "the hero lost only that field")
-check(heroBack?.inconsistencies().isEmpty == true, "and holds together itself")
-check(heroBack?.fields.first(where: { $0.name == "current_hp" })?.value.prefix(4) == [4, 0, 0, 0], "its other values are untouched")
+check(heroBack?.fields.map(\.name) == ["base_root", "name", "trinketId", "current_hp"], "the hero comes back whole")
+check(heroBack?.fields.first(where: { $0.name == "current_hp" })?.value.prefix(4) == [4, 0, 0, 0], "with its values intact")
 
-// The iPad's own screen lists all six add-ons, so every name is one it knows;
-// the Butcher's Circus is the only one it has never offered.
-check(Sanitise.shownAddOnsToKeep.contains("districts") && Sanitise.shownAddOnsToKeep.contains("flagellant"),
-      "Districts and Flagellant stay in the list of add-ons already shown")
-check(!Sanitise.shownAddOnsToKeep.contains("arena_mp"), "the Butcher's Circus does not")
-// Which add-ons a copy may ask for is read from a save the iPad wrote, not assumed.
-let refDir = dropbox.appendingPathComponent("reference_profile")
-makeCampaign(refDir, estate: "Ref", savedAt: "2026-09-16 09:00:00", roster: "r", at: clock)
-check(Sanitise.addOnsEnabledOnTheIPad(reference: refDir) == nil,
-      "a reference with no add-on list of its own tells us nothing, and is not guessed at")
-try? fm.removeItem(at: refDir)
+// The Butcher's Circus comes out of the record of add-ons already shown; the
+// campaign's own list of add-ons is a different object of the same name and is
+// never touched, because a campaign asking for add-ons the iPad has not got
+// still opens there.
+var shown = try! SaveFile(gameLikeShown)
+check(Sanitise.addOns(in: shown, under: "presented_dlc") == ["musketeer", "arena_mp"], "both are listed to begin with")
+check(Sanitise.removeAddOn(&shown, named: "arena_mp", from: "presented_dlc"), "the Circus comes out")
+let shownOut = shown.serialized(); let shownBack = try! SaveFile(shownOut)
+check(shownBack.serialized() == shownOut && shownBack.inconsistencies().isEmpty, "the file holds together")
+check(Sanitise.addOns(in: shownBack, under: "presented_dlc") == ["musketeer"], "and only that one is gone")
+check(Sanitise.addOns(in: shownBack, under: "base_root") == ["crimson_court"], "the campaign's own list is untouched")
 
 // No object may come out of an edit carrying bytes of its own.
 func objectsWithBytes(_ d: Data) -> Int {
     (try! SaveFile(d)).fields.filter { $0.isObject && !$0.value.isEmpty }.count
 }
 check(objectsWithBytes(town) == 0, "a save the game wrote has no such object")
-var padTest = try! SaveFile(gameLike)
+var padTest = try! SaveFile(gameLikeShown)
 check(padTest.removeObject(named: "dlc", under: "presented_dlc"), "remove something ahead of an object")
 let padOut = padTest.serialized()
 check(objectsWithBytes(padOut) == 0, "and none appears after the edit")
@@ -582,88 +470,6 @@ check((try! SaveFile(padOut)).inconsistencies().isEmpty, "the result passes its 
 var padTest2 = try! SaveFile(town)
 check(padTest2.removeObject(named: "circus", under: "buildings"), "remove an object from the Hamlet")
 check(objectsWithBytes(padTest2.serialized()) == 0, "still none")
-
-// The estate's purse: add-on currencies come out, the game's own stay, and what
-// remains is renumbered. Matching is on the currency, not a mention of the word.
-func purse(_ entries: [(String, String)]) -> Data {
-    var objs: [(Int, Int, Int, Int)] = [(0, 0, 1, 1 + entries.count * 2)]
-    var flds: [(String, Bool, Int, [UInt8])] = [("base_root", true, 0, []), ("wallet", true, 1, [])]
-    objs.append((0, 1, entries.count, entries.count * 2))
-    for e in entries {
-        objs.append((1, flds.count, 1, 1))
-        flds.append((e.0, true, objs.count - 1, []))
-        flds.append(("type", false, 0, []))
-    }
-    // Lay it out once to learn where each value lands, then write the strings with
-    // the padding that footing calls for, exactly as the game's own files carry it.
-    var save = try! SaveFile(dsonFile(objects: objs, fields: flds))
-    var next = 0
-    for i in save.fields.indices where save.fields[i].name == "type" {
-        let text = entries[next].1; next += 1
-        let pad = (4 - save.fields[i].align) % 4
-        var v = [UInt8](repeating: 0, count: pad)
-        let n = text.utf8.count + 1
-        v += [UInt8(n & 0xff), 0, 0, 0] + Array(text.utf8) + [0]
-        save.fields[i].value = v
-    }
-    return save.serialized()
-}
-var wal = try! SaveFile(purse([("0", "gold"), ("1", "shard"), ("2", "crest"), ("3", "blueprint")]))
-let gone = Sanitise.removeEntries(&wal, under: "wallet", whereField: "type", isOneOf: Sanitise.switchedOffCurrencies)
-check(gone.sorted() == ["blueprint", "shard"], "the add-on currencies come out")
-let walOut = wal.serialized(); let walBack = try! SaveFile(walOut)
-check(walBack.serialized() == walOut && walBack.inconsistencies().isEmpty, "the purse still holds together")
-check(walBack.childObjects(ofObject: walBack.fields[walBack.indexOfObject(named: "wallet")!].object)
-        .map { walBack.fields[$0].name } == ["0", "1"], "and what remains is renumbered from zero")
-let keptCurrencies = walBack.fields.indices.filter { walBack.fields[$0].name == "type" }.compactMap { walBack.stringValue(at: $0) }
-check(keptCurrencies == ["gold", "crest"], "the game's own currencies are still there, in order")
-
-// The stamp is per file, not per save: it says which build that file's format
-// belongs to, and a campaign from the iPad carries three different numbers.
-let stampRef = dropbox.appendingPathComponent("stamp_reference")
-try! fm.createDirectory(at: stampRef, withIntermediateDirectories: true)
-for (name, build) in [("persist.game.json", 24774), ("persist.tutorial.json", 21980)] {
-    var f = try! SaveFile(saveBytes("x")); f.build = build
-    try! f.serialized().write(to: stampRef.appendingPathComponent(name))
-}
-let readStamps = Sanitise.buildStamps(reference: stampRef)
-check(readStamps["persist.game.json"] == 24774 && readStamps["persist.tutorial.json"] == 21980,
-      "each file's own stamp is read back from a reference campaign")
-check(readStamps.count == 2, "and only the save files are read")
-try? fm.removeItem(at: stampRef)
-
-// Needing an add-on the iPad has not got is worth saying, but not worth holding
-// a campaign back for: such a campaign was carried across on 2026-09-16 and the
-// iPad opened it, having offered to take the add-on content out.
-check(Compatibility.missingAddOns(profileDir: sal, iPadHas: ["musketeer"]).isEmpty
-      || !Compatibility.missingAddOns(profileDir: sal, iPadHas: ["musketeer"]).isEmpty,
-      "the add-ons a campaign needs can be compared with the iPad's")
-check(Compatibility.missingAddOns(profileDir: sal, iPadHas: nil).isEmpty,
-      "with no campaign from the iPad to compare against, nothing is claimed")
-
-// Switching The Butcher's Circus on makes the game write a profile_9 of arena
-// data with no campaign in it. That is not a campaign and must not be published.
-let circusProfile = steam.appendingPathComponent("profile_9")
-try! fm.createDirectory(at: circusProfile, withIntermediateDirectories: true)
-writeSave(circusProfile, "persist.circus_estate.json", "arena", at: clock)
-writeSave(circusProfile, "persist.rankings.json", "ranks", at: clock)
-check(!profileFolders(in: steam).contains("profile_9"), "a folder with no campaign file in it is not a campaign")
-clock += 10; tick()
-check(!fm.fileExists(atPath: dropbox.appendingPathComponent("profile_9").path), "so it is never published")
-try? fm.removeItem(at: circusProfile)
-
-// A renamed field must carry its own hash. Leaving the old one behind is
-// invisible to anything that reads names, and made every renumbered list wrong.
-check(SaveFile.hash("base_root") == 0x469049e2, "the hash is name times 53, plus each byte")
-check(SaveFile.hash("version") == 0xfde2e632, "checked against a save the game wrote")
-var renamed = try! SaveFile(town)
-let target = renamed.fields.indices.first { renamed.fields[$0].name == "circus" }!
-check(renamed.renameField(at: target, to: "abbey"), "rename a field")
-check(renamed.fields[target].hash == SaveFile.hash("abbey"), "its hash goes with it")
-check(renamed.inconsistencies().isEmpty, "and the save still holds together")
-var stale = try! SaveFile(town)
-stale.fields[1].hash = 12345
-check(!stale.inconsistencies().isEmpty, "a name carrying someone else's hash is caught")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

@@ -45,141 +45,45 @@ save**. Whichever loses is still in the backups folder.
 On the very first run there is no history yet, so the newer of the two wins
 and the log says which.
 
-### Saves the iPad cannot open, and the tool that tries to fix them
+### The two edits that let the iPad open a Mac campaign
 
-The two games are far apart. Every save carries the build that wrote it, and
-Steam's is **27850** while the iPad's is **24774** — the iPad edition was last
-given new content in 2019 and last released in 2022. Red Hook's import article
-warns that a save carrying content the iPad lacks "may result in errors"; this
-is that, several times over.
+The iPad runs a build of the game from 2019; Steam's is thousands of builds
+newer. Almost none of that matters. Two things do, and a copy is published with
+both of them changed and nothing else.
 
-Two kinds of difference matter:
+The first is in the campaign log. Each chapter holds numbered entries, one per
+thing worth recording about that week, and the newer build writes an extra entry
+carrying a record the iPad's build has never written. Faced with it, the iPad
+refuses the campaign. Removing the record on its own is not enough — the entry
+stays behind holding only its type marker — so the entry goes whole and the
+entries beside it are renumbered.
 
-- **The Butcher's Circus.** The free player-versus-player add-on never came to
-  iOS. With it active the game records a `circus` building in the Hamlet, which
-  the iPad has no code for.
-- **Structures the newer build added.** A save-tampering record in the estate,
-  a trinket-feedback log, and five fields on every hero — `added_buffs`,
-  `did_transform`, `hero_name`, `previous_trinket_id`, `trinkets_gained_count`
-  — in the estate, the quest and the town.
+The second is smaller. The save keeps a record of which add-ons the game has
+shown you, and on a Mac that list names The Butcher's Circus, which never came
+to iOS. Taking that one entry out stops the iPad asking about add-ons it cannot
+provide.
 
-So a Mac save is checked before it is published, held back if it carries the
-Circus, and the panel offers **Prepare a copy for the iPad**. That publishes a
-copy stamped with the iPad's build, with those structures taken out. The Steam
-save is never touched.
+Nothing else is touched, and the Steam saves are never written to.
 
-Every removal in that list was checked against two saves the iPad wrote itself:
-the field appears in the Steam save and nowhere in either iPad save, **in that
-file**. The file is the whole point. `hero_name` is new inside the estate but
-the iPad has always written it in the campaign log, a hundred times over, and
-`heroes` is the iPad's own word in three files. Taking either out everywhere
-would have thrown away the campaign's history. Both are left alone where the
-iPad uses them.
+**How this was found**, since it took a long time and almost every theory along
+the way was wrong. Two experiments settled it, neither of them clever. Playing a
+single week on a campaign the iPad had written produced a save that broke from
+one known action, which gave a before and an after differing by one week instead
+of two unrelated campaigns to compare. Then playing that same week on the iPad
+produced the chapter to hold the Mac's against. The two differed by three fields.
 
-What is carried through untouched: every hero blob in the roster, byte for
-byte, and every name the iPad writes.
+Things that were suspected at length and are **not** the problem: the Butcher's
+Circus building in the Hamlet, the add-on currencies and trinkets in the estate,
+the quests and narration mentioning add-on content, the per-hero fields the
+newer build adds, the upgrade trees the iPad does not know, and the build number
+stamped into each file. A campaign carrying every one of those opens on the iPad
+once the two edits above are made.
 
-A value in these files usually sits on a four-byte boundary, reached by zero
-bytes written after the field's name. Those bytes belong to the position rather
-than to the value: take a field out, everything after it slides, and padding
-that used to align a number aligns nothing. Each field therefore remembers where
-its value stood against that boundary, and writing puts it back on the same
-footing. Getting this wrong is what made the iPad crash while it was still
-reading the folder — the import screen parses every save to build its list, and
-one estate file had two hundred values a byte or two off.
+A campaign is never held back, either. One asking for add-ons the iPad has not
+got still opens there: the game offers to take that content out, and does. The
+app says so once and publishes anyway.
 
-Every rewritten file is checked three times before anything is published: it must
-read back as the same bytes, and its object tree must agree with itself —
-every object's count of what is inside it recomputed from the fields and
-compared with what it claims; and every value must stand against a four-byte
-boundary where it stood before. The later checks exist because the first is not
-enough. A number read wrongly and written back unchanged round-trips perfectly
-while describing a tree that no longer exists, and that is what once put a
-corrupted copy in front of the iPad.
-
-### A hero is a save file of its own
-
-The roster does not hold heroes as rows. Each one is a whole save file in its
-own right, carried inside a field as padding, a four-byte length, and then the
-file. Everything the game has ever learned to record about a hero lives in
-there — which means it is out of reach of every edit made to the file that
-holds it, and a pass over the roster can come away reporting success having
-changed nothing that matters.
-
-That is where the last of it was hiding. Every one of the twenty-six heroes on
-this Mac carries a `trinketId`; no hero the iPad has written has ever had one.
-Eight of them also carry the same five fields the newer build added elsewhere.
-Preparing a copy now opens each hero, takes those out, and puts it back with its
-length corrected, leaving the hero's name, class and everything else as it was.
-
-### Two lists, not one
-
-A campaign keeps two records of add-ons and they do different jobs. The one at
-the save's root says which add-ons the campaign *uses*. A second, `presented_dlc`,
-says which the game has already *shown* the player. The second is what tells the
-game this save has been reconciled with them, and emptying it makes the game ask
-again and then refuse to open the campaign at all — "Required DLC is missing".
-
-The first rule this tool ever had emptied that list, to be rid of a reference to
-the Butcher's Circus sitting in it. That was the wrong shape of fix and it
-outlived several rounds of looking elsewhere. Only the Butcher's Circus entry
-comes out now; everything else the game has shown you stays where it is.
-
-### The add-ons a campaign asks for
-
-This is the one that matters most. A campaign records which add-ons it uses in a
-`dlc` object at the save's root, and the iPad shows its activation window for
-anything listed there that it does not have. A campaign asking for an add-on the
-iPad cannot provide is one it cannot open.
-
-The two sides differ because they were bought separately. On this Mac the
-campaign asks for Musketeer, Crimson Court, districts, flagellant, Shieldbreaker
-and Colour of Madness. The same campaign on the iPad asks only for Musketeer and
-Shieldbreaker. So preparing a copy trims that list to what a save written by the
-iPad itself asks for, and renumbers what remains so the entries still run from
-zero. The heroes stay: the iPad's own campaign holds three Flagellants while
-asking for no Crimson Court, because a hero lives in the roster rather than
-behind the list.
-
-### The estate's purse
-
-The purse carries a line per currency. Gold, busts, portraits, deeds and crests
-are the game's own. Shards and memories come with Colour of Madness and
-blueprints with Districts, and an estate holding one of those is an estate the
-iPad will not open. A save from the iPad has five lines; this Mac's had eight.
-The three extra ones come out, matched on the currency itself rather than on any
-mention of the word.
-
-### Content from an add-on that is switched off
-
-The lists are bookkeeping; the campaign also has to not *contain* anything from
-an add-on the iPad has switched off, or the game offers to strip the add-ons out
-for good rather than open it. Three things were doing that here: two quests on
-offer from Colour of Madness and Crimson Court, a Crimson Court tincture
-promised as one of their rewards, and a line in the narration log about the
-Butcher's Circus arena. The numbered entries holding them come out whole and
-what remains is renumbered, which is safe because offered quests are replaced
-each week and the log is a record of what has been said.
-
-The test is not a list of rules but a comparison: after preparing, the copy must
-name no add-on content that a save from the iPad does not.
-
-**Known remaining difference.** The Mac's sanitarium records a `trinketId` on
-each quirk. Neither iPad save has ever written a quirk entry at all, so there
-is no evidence about whether its build knows that field. It is left in rather
-than guessed at.
-
-**Better still, don't enable it.** In Steam, right-click Darkest Dungeon →
-Properties → DLC and uncheck The Butcher's Circus. That removes the first kind
-of difference at the source. It does not touch the second.
-
-One thing preparing cannot change: the iPad writes its own `persist.game.json`
-when it imports, so nothing in that file survives the trip — which is why
-clearing the campaign's add-on list has no effect. And which add-ons a campaign
-uses is fixed when the campaign is created, on any platform, which is why an
-imported campaign shows them locked.
-
-What it cannot see:What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
+What it cannot see:What it cannot see:What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
 there. If you export from the iPad without having imported the latest Mac
 save, the Mac's progress is replaced (and backed up), the same as it would be
 by hand. Also, merely opening a campaign on the Mac rewrites a few save files,

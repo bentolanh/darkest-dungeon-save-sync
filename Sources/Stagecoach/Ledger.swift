@@ -30,7 +30,7 @@ struct Ledger: Codable, Equatable {
     var resolutions: [String: String] = [:]      // conflict id → "mac" | "ipad"
     /// Slots whose published copy was cleaned for the iPad, and the Mac digest it
     /// was made from. Kept across restarts so a prepared copy is not re-flagged.
-    var preparedForIPad: [String: String] = [:]
+    var publishedFrom: [String: String] = [:]
 
     static let url = Paths.supportDir.appendingPathComponent("ledger.json")
 

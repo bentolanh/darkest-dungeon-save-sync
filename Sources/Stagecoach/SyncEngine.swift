@@ -29,9 +29,6 @@ struct SyncConfig {
     var steamHelper: URL?              // stagecoach-cli; the push runs there so the process can exit
     var archiveExports = true
     var cloudPush = true
-    var publishIncompatible = false   // publish a Mac save the iPad can't load anyway
-    var clearAddOnList = false        // when preparing, also clear the campaign's add-on list
-    var matchIPadBuild = false        // when preparing, down-convert to the build the iPad writes
     var quietSeconds: TimeInterval = 5
     var gameIsRunning: () -> Bool = { Processes.gameIsRunning }
     var steamIsRunning: () -> Bool = { Processes.steamIsRunning }
@@ -42,9 +39,7 @@ struct ProfileStatus: Identifiable, Equatable {
     var id: String { profile }
     var profile: String
     var estate: String?
-    var issues: [CompatibilityIssue] = []
     var missingAddOns: [String] = []     // add-ons this campaign needs that the iPad has not got
-    var preparedForIPad = false
     var macNewest: Date?
     var mirrorNewest: Date?
     var inStep: Bool
@@ -56,7 +51,6 @@ struct SyncStatus: Equatable {
     var conflicts: [Conflict] = []
     var waitingForDownload: [String] = []
     var exportsStuck: [String] = []          // consumed exports still inside Apps/DarkestDungeon
-    var heldBack: [ProfileStatus] = []       // Mac saves not published: the iPad would crash on them
     var waitingForGameToQuit = false
     var lastTick: Date?
     var lastError: String?
@@ -69,7 +63,6 @@ final class SyncEngine {
     private let queue = DispatchQueue(label: "stagecoach.engine")
     private var stability: [String: (signature: String, since: Date)] = [:]
     private var reportedMissingAddOns: Set<String> = []
-    private var warnedIncompatible: Set<String> = []
     private var pendingRetry: DispatchWorkItem?
 
     var log: (String) -> Void = { print($0) }
@@ -110,7 +103,6 @@ final class SyncEngine {
         defer {
             st.conflicts = ledger.conflicts
             st.exportsStuck = archiveFailures
-            st.heldBack = st.profiles.filter { !$0.issues.isEmpty && !config.publishIncompatible && !$0.preparedForIPad }
             status = st
             statusChanged(st)
         }
@@ -247,6 +239,10 @@ final class SyncEngine {
                     do {
                         let cloudState = try importToSteam(profile: profile, from: source, snapshot: ipad, target: target, existing: mac)
                         try writeMirror(profile: profile, from: source, snapshot: ipad, dropbox: dropbox)
+                        // What now stands in Dropbox came from the iPad and needs no
+                        // editing, so the outbound pass must not treat it as unpublished
+                        // and overwrite the record of where this campaign came from.
+                        ledger.publishedFrom[profile] = Snapshot.read(target)?.digest ?? ipad.digest
                         ledger.profiles[profile] = ProfileRecord(syncedDigest: ipad.digest, syncedSaveTime: saveTime(of: target, snapshot: Snapshot.read(target)),
                                                                  syncedAt: config.now(), lastSource: "ipad", cloudState: cloudState)
                         log("\(label): imported into Steam (\(cloudState == "uploaded" ? "pushed to Steam Cloud" : "Steam Cloud will pick it up when the game next launches"))")
@@ -288,51 +284,22 @@ final class SyncEngine {
 
             if pendingProfiles.contains(profile) { continue }
 
-            // A save carrying content the iPad cannot load is not published: the
-            // iPad would list the campaign and then crash opening it.
-            ps.issues = Compatibility.check(profileDir: target)
             ps.missingAddOns = Compatibility.missingAddOns(profileDir: target, iPadHas: iPadAddOns)
-            // A copy counts as prepared only while it is still standing in Dropbox.
-            // Remembering one that has since been deleted leaves the campaign
-            // silently unpublished and nothing said about it.
-            ps.preparedForIPad = ledger.preparedForIPad[profile] == mac.digest && mirror != nil
-            if ledger.preparedForIPad[profile] != nil, ledger.preparedForIPad[profile] != mac.digest {
-                ledger.preparedForIPad.removeValue(forKey: profile)
-                log("\(ps.estate ?? profile): played since the copy for the iPad was made, so that copy is out of date")
-            }
-            // An add-on a campaign was built with cannot be taken away — not by
-            // this tool and not by the game. If the iPad has not got it, that
-            // campaign will never open there, and saying so once is worth more
-            // than publishing a copy that cannot work.
+
             // Said once, and then the campaign goes out anyway. A campaign asking
-            // for add-ons the iPad has not got still opens there; the game offers
-            // to take the add-on content out and does. Holding it back would be
-            // deciding something the iPad is better placed to decide.
+            // for add-ons the iPad has not got still opens there: the game offers
+            // to take that content out, and does.
             if !ps.missingAddOns.isEmpty, !reportedMissingAddOns.contains(profile) {
                 reportedMissingAddOns.insert(profile)
                 let names = ps.missingAddOns.map(Compatibility.readable).joined(separator: " and ")
                 log("\(ps.estate ?? profile): uses \(names), which the iPad has not got — it will offer to take that content out, and cannot put it back")
             }
 
-            // The Butcher's Circus building is the one thing still held back. A
-            // campaign with the add-on merely switched on came across fine, but no
-            // campaign with the building itself in its Hamlet has been carried
-            // over yet, so this waits for evidence rather than assuming either way.
-            if !ps.issues.isEmpty, !config.publishIncompatible, !ps.preparedForIPad {
-                if mirror?.digest != mac.digest, !warnedIncompatible.contains(profile) {
-                    warnedIncompatible.insert(profile)
-                    log("\(ps.estate ?? profile): not published for the iPad — \(ps.issues[0].explanation)")
-                    notify("This campaign is held back", "\(ps.estate ?? profile): \(ps.issues[0].explanation)")
-                }
-                continue
-            }
-            warnedIncompatible.remove(profile)
-
-            if ps.preparedForIPad {
-                ps.inStep = true
-                continue
-            }
-            if mirror?.digest == mac.digest {
+            // A published copy is not the Mac save byte for byte: two small edits
+            // make it open on the iPad. So what was published is remembered by the
+            // state of the campaign it came from, rather than by comparing the two.
+            ps.inStep = ledger.publishedFrom[profile] == mac.digest && mirror != nil
+            if ps.inStep {
                 if ledger.profiles[profile] == nil {
                     ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
                                                              syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
@@ -345,15 +312,19 @@ final class SyncEngine {
                 continue
             }
             do {
-                try writeMirror(profile: profile, from: target, snapshot: mac, dropbox: dropbox)
+                let report = try Sanitise.copy(profile: profile, from: target,
+                                               to: dropbox.appendingPathComponent(profile, isDirectory: true),
+                                               snapshot: mac)
+                ledger.publishedFrom[profile] = mac.digest
                 ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
                                                          syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
                 ps.record = ledger.profiles[profile]
                 ps.inStep = true
                 ps.mirrorNewest = Snapshot.read(mirrorURL)?.newestModified
-                log("\(profile): Mac save copied to Dropbox for the iPad")
+                let what = report.removed.isEmpty ? "" : " (\(report.removed.joined(separator: "; ")))"
+                log("\(ps.estate ?? profile): copied to Dropbox for the iPad\(what)")
             } catch {
-                log("\(profile): could not copy to Dropbox: \(error)")
+                log("\(ps.estate ?? profile): could not copy to Dropbox: \(error)")
                 st.lastError = "\(profile): \(error)"
             }
         }
@@ -579,48 +550,6 @@ final class SyncEngine {
     /// out of the app folder; a cancelled dialog fails the move). Not retried until
     /// the user asks, so the dialog doesn't come back every half minute.
     private(set) var archiveFailures: [String] = []
-
-    /// Publish Mac saves even when the iPad cannot load them (the user's call).
-    func setPublishIncompatible(_ on: Bool) {
-        queue.async {
-            self.config.publishIncompatible = on
-            self.warnedIncompatible.removeAll()
-            self.tick(reason: on ? "publishing incompatible saves" : "holding incompatible saves")
-        }
-    }
-
-    /// Publishes a cleaned copy of one Mac campaign for the iPad to import.
-    /// Runs only when asked; nothing here happens on its own.
-    func prepareForIPad(profile: String, completion: @escaping (Result<SanitiseReport, Error>) -> Void) {
-        queue.async {
-            guard let steam = self.config.steamRemote, let dropbox = self.config.dropboxFolder else {
-                completion(.failure(SaveFile.Failure.notASave)); return
-            }
-            let source = steam.appendingPathComponent(profile, isDirectory: true)
-            guard let snap = Snapshot.read(source), !snap.isEmpty else {
-                completion(.failure(SaveFile.Failure.notASave)); return
-            }
-            do {
-                let report = try Sanitise.copy(profile: profile, from: source,
-                                               to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
-                                               clearAddOnList: self.config.clearAddOnList,
-                                               matchIPadBuild: self.config.matchIPadBuild,
-                                               stripNewerStructures: true)
-                self.ledger.preparedForIPad[profile] = snap.digest
-                self.ledger.profiles[profile] = ProfileRecord(syncedDigest: snap.digest,
-                                                              syncedSaveTime: saveTime(of: source, snapshot: snap),
-                                                              syncedAt: self.config.now(), lastSource: "mac",
-                                                              cloudState: self.ledger.profiles[profile]?.cloudState ?? "uploaded")
-                self.ledger.save(to: self.ledgerURL)
-                self.log("\(report.estate ?? profile): a copy without \(report.removed.joined(separator: " and ")) is now in Dropbox for the iPad")
-                completion(.success(report))
-                self.tick(reason: "prepared a campaign for the iPad")
-            } catch {
-                self.log("\(profile): could not prepare a copy for the iPad: \(error)")
-                completion(.failure(error))
-            }
-        }
-    }
 
     func retryArchive() {
         queue.async {
