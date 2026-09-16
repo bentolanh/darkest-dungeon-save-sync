@@ -6,7 +6,9 @@
 //   stagecoach-cli steam-write-test   read steam_init.json from the cloud and write it back unchanged
 //   stagecoach-cli sync               run one sync pass with the real folders and ledger
 //   stagecoach-cli codec-check <dir>  read and rewrite every save under a folder, byte for byte
-//   stagecoach-cli prepare <profile_N> [--without-add-ons] [--keep-build] [--like <iPad profile dir>]
+//   stagecoach-cli prepare <profile_N> [--like <iPad profile dir>] [--rename <name>]
+//                                     [--strip-add-on-content] [--keep-build] [--as <slot>]
+//                                     By default a copy is published with nothing removed.
 //                                     publish a copy of a Mac campaign the iPad can open
 //   stagecoach-cli steam-push <profile_N> [folder]
 //                                     write a profile folder into Steam Cloud through the client
@@ -138,7 +140,16 @@ case "prepare":
     let profile = args[args.startIndex + 1]
     let clearAddOns = args.contains("--without-add-ons")
     let matchBuild = !args.contains("--keep-build")
-    let stripNewer = !args.contains("--keep-newer")
+    let stripNewer = args.contains("--strip-add-on-content")
+    let stripCircus = args.contains("--strip-circus")
+    var knownTrees: Set<[UInt8]>? = nil
+    if let i = args.firstIndex(of: "--trim-upgrades-like"), args.index(after: i) < args.endIndex {
+        knownTrees = Sanitise.upgradeTrees(in: URL(fileURLWithPath: args[args.index(after: i)], isDirectory: true))
+    }
+    var stripNewerIn: Set<String>? = nil
+    if let i = args.firstIndex(of: "--strip-newer-in"), args.index(after: i) < args.endIndex {
+        stripNewerIn = Set(args[args.index(after: i)].split(separator: ",").map(String.init))
+    }
     let stripQuirks = args.contains("--strip-quirk-trinkets")
     var keepAddOns: Set<String>? = nil
     if let i = args.firstIndex(of: "--keep-add-ons"), args.index(after: i) < args.endIndex {
@@ -161,7 +172,9 @@ case "prepare":
         let r = try Sanitise.copy(profile: profile, from: src,
                                   to: dropbox.appendingPathComponent(slot, isDirectory: true), snapshot: snap,
                                   clearAddOnList: clearAddOns, matchIPadBuild: matchBuild,
-                                  stripNewerStructures: stripNewer, stripQuirkTrinkets: stripQuirks,
+                                  stripNewerStructures: stripNewer, stripCircus: stripCircus,
+                                  stripNewerIn: stripNewerIn, knownUpgradeTrees: knownTrees,
+                                  stripQuirkTrinkets: stripQuirks,
                                   keepAddOns: keepAddOns, rename: rename, buildStamps: stamps)
         var led = Ledger.load()
         led.preparedForIPad[slot] = snap.digest

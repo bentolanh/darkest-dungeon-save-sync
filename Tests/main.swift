@@ -70,7 +70,8 @@ func saveBytes(_ marker: String) -> Data {
     var value = p32(marker.utf8.count + 1)
     value += Array(marker.utf8); value.append(0)
     let data = Array(name.utf8) + [0] + value
-    let fieldTable = p32(0) + p32(0) + p32(((name.utf8.count + 1) & 0x1FF) << 2)   // one plain field
+    // The field table carries the name's own hash beside it, as the game writes it.
+    let fieldTable = p32(Int(SaveFile.hash(name))) + p32(0) + p32(((name.utf8.count + 1) & 0x1FF) << 2)
     var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
     func put(_ o: Int, _ v: Int) { let b = p32(v); h[o] = b[0]; h[o+1] = b[1]; h[o+2] = b[2]; h[o+3] = b[3] }
     put(8, 64); put(16, 0); put(20, 0); put(24, 64)
@@ -284,7 +285,8 @@ func dsonFile(objects: [(parent: Int, nameField: Int, direct: Int, all: Int)],
     var ft: [UInt8] = []
     for (f, off) in zip(fields, offs) {
         let root = (f.name == "base_root") ? (1 << 31) : 0
-        ft += p32(0) + p32(off) + p32(root | ((f.object & 0xFFFFF) << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0))
+        ft += p32(Int(SaveFile.hash(f.name))) + p32(off)
+            + p32(root | ((f.object & 0xFFFFF) << 11) | ((f.name.utf8.count + 1) & 0x1FF) << 2 | (f.isObject ? 1 : 0))
     }
     var h = [UInt8](repeating: 0, count: 64); h[0] = 0x01; h[1] = 0xB1
     func put(_ o: Int, _ v: Int) { let p = p32(v); h[o] = p[0]; h[o+1] = p[1]; h[o+2] = p[2]; h[o+3] = p[3] }
@@ -649,6 +651,19 @@ check(!profileFolders(in: steam).contains("profile_9"), "a folder with no campai
 clock += 10; tick()
 check(!fm.fileExists(atPath: dropbox.appendingPathComponent("profile_9").path), "so it is never published")
 try? fm.removeItem(at: circusProfile)
+
+// A renamed field must carry its own hash. Leaving the old one behind is
+// invisible to anything that reads names, and made every renumbered list wrong.
+check(SaveFile.hash("base_root") == 0x469049e2, "the hash is name times 53, plus each byte")
+check(SaveFile.hash("version") == 0xfde2e632, "checked against a save the game wrote")
+var renamed = try! SaveFile(town)
+let target = renamed.fields.indices.first { renamed.fields[$0].name == "circus" }!
+check(renamed.renameField(at: target, to: "abbey"), "rename a field")
+check(renamed.fields[target].hash == SaveFile.hash("abbey"), "its hash goes with it")
+check(renamed.inconsistencies().isEmpty, "and the save still holds together")
+var stale = try! SaveFile(town)
+stale.fields[1].hash = 12345
+check(!stale.inconsistencies().isEmpty, "a name carrying someone else's hash is caught")
 
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)

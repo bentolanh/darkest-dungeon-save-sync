@@ -604,7 +604,8 @@ final class SyncEngine {
                 let report = try Sanitise.copy(profile: profile, from: source,
                                                to: dropbox.appendingPathComponent(profile, isDirectory: true), snapshot: snap,
                                                clearAddOnList: self.config.clearAddOnList,
-                                               matchIPadBuild: self.config.matchIPadBuild)
+                                               matchIPadBuild: self.config.matchIPadBuild,
+                                               stripNewerStructures: true)
                 self.ledger.preparedForIPad[profile] = snap.digest
                 self.ledger.profiles[profile] = ProfileRecord(syncedDigest: snap.digest,
                                                               syncedSaveTime: saveTime(of: source, snapshot: snap),

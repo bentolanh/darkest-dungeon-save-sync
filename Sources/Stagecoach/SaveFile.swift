@@ -331,12 +331,25 @@ struct SaveFile {
         fields[field].value = v
     }
 
+    /// The hash the field table carries beside every name. Multiply by 53 and add
+    /// each byte — checked against four hundred names in a save the game wrote.
+    static func hash(_ name: String) -> UInt32 {
+        var h: UInt32 = 0
+        for c in name.utf8 { h = h &* 53 &+ UInt32(c) }
+        return h
+    }
+
     /// Renames a field. A different length is allowed: writing the file works out
     /// every position afresh, so nothing is left standing in the wrong place.
+    ///
+    /// The hash goes with it. Leaving the old one behind is invisible to any
+    /// check that only reads names, and left every renumbered list in this tool
+    /// quietly wrong — a field called "9" carrying the hash of "109".
     @discardableResult
     mutating func renameField(at field: Int, to name: String) -> Bool {
         guard field < fields.count, !name.isEmpty, name.utf8.count < 200 else { return false }
         fields[field].name = name
+        fields[field].hash = SaveFile.hash(name)
         return true
     }
 
@@ -399,6 +412,12 @@ struct SaveFile {
                 a = x == 0 ? nil : objects[x].parent
             }
         }
+        // Every name must carry its own hash.
+        for f in fields where f.hash != SaveFile.hash(f.name) {
+            problems.append("'\(f.name)' carries the hash of some other name")
+        }
+        guard problems.isEmpty else { return problems }
+
         // Every value must stand against a four-byte boundary exactly as it did
         // before. A value slid off its footing is read as nonsense by the game.
         let dataStart = 64 + objects.count * 16 + fields.count * 12

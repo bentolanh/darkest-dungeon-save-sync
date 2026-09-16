@@ -81,6 +81,12 @@ enum Sanitise {
     /// 2019 and its last release 2022; Steam is thousands of builds ahead.
     static let iPadBuild = 24774
 
+    // Nothing below is done unless it is asked for. Every one of these removals
+    // was written while the iPad was believed to need it, and the iPad turned out
+    // to handle its own add-on content perfectly well. Left on by default, they
+    // tore four quests out of a campaign that legitimately had those add-ons
+    // switched on, and the Mac itself then refused to open it.
+
     /// Structures the newer build writes that the iPad's build never does.
     ///
     /// Each line was checked against two saves the iPad wrote itself: the field
@@ -213,6 +219,52 @@ enum Sanitise {
     /// add-on content remains the only exhaustive answer.
     static let switchedOffTrinkets: Set<String> = ["martyrs_seal"]
 
+    /// The building upgrades a campaign has bought, each recorded against a tree
+    /// identified by a four-byte number rather than a name. The Mac build knows
+    /// trees the iPad has never heard of — after one week of play on 2026-09-16 a
+    /// campaign that had only trees the iPad knows had gained seventeen it does
+    /// not, across a hundred and one purchases, and it stopped loading there.
+    /// Every campaign that crashes has some; every campaign that loads has none.
+    ///
+    /// Which trees are which cannot be worked out from the file, so the answer is
+    /// taken from a campaign the iPad wrote: any purchase against a tree that
+    /// appears in no such campaign comes out.
+    static func upgradeTrees(in profileDir: URL) -> Set<[UInt8]> {
+        guard let d = try? Data(contentsOf: profileDir.appendingPathComponent("persist.upgrades.json")),
+              let s = try? SaveFile(d) else { return [] }
+        return Set(s.fields.filter { $0.name == "tree_id" }.map { Array($0.value.prefix(4)) })
+    }
+
+    /// Removes every purchase made against a tree outside the given set, and
+    /// renumbers what remains.
+    static func trimUpgrades(_ save: inout SaveFile, keeping known: Set<[UInt8]>) -> Int {
+        guard let list = save.indexOfObject(named: "purchases") else { return 0 }
+        var removed = 0
+        while true {
+            let entries = save.childObjects(ofObject: save.fields[list].object)
+            var doomed: Int? = nil
+            for entry in entries {
+                let o = save.fields[entry].object
+                let start = save.objects[o].nameField
+                let end = min(start + 1 + save.objects[o].all, save.fields.count)
+                for i in start..<end where save.fields[i].name == "tree_id" {
+                    if !known.contains(Array(save.fields[i].value.prefix(4))) { doomed = entry }
+                    break
+                }
+                if doomed != nil { break }
+            }
+            guard let entry = doomed else { break }
+            save.removeObject(at: entry)
+            removed += 1
+        }
+        if removed > 0 {
+            for (i, entry) in save.childObjects(ofObject: save.fields[list].object).enumerated() {
+                save.renameField(at: entry, to: String(i))
+            }
+        }
+        return removed
+    }
+
     /// Removes numbered entries under a list by the value of one of their fields,
     /// renumbering what remains.
     static func removeEntries(_ save: inout SaveFile, under list: String, inside parent: String? = nil,
@@ -298,7 +350,9 @@ enum Sanitise {
     @discardableResult
     static func copy(profile: String, from source: URL, to destination: URL, snapshot: Snapshot,
                      clearAddOnList: Bool = false, matchIPadBuild: Bool = false,
-                     stripNewerStructures: Bool = true, stripQuirkTrinkets: Bool = false,
+                     stripNewerStructures: Bool = false, stripCircus: Bool = false,
+                     stripNewerIn: Set<String>? = nil, knownUpgradeTrees: Set<[UInt8]>? = nil,
+                     stripQuirkTrinkets: Bool = false,
                      keepAddOns: Set<String>? = nil, rename: String? = nil,
                      buildStamps: [String: Int] = [:]) throws -> SanitiseReport {
         var report = SanitiseReport(profile: profile, estate: CampaignInfo.read(profileDir: source).estate)
@@ -347,14 +401,15 @@ enum Sanitise {
             }
         }
 
-        if matchIPadBuild || stripNewerStructures {
+        if matchIPadBuild || stripNewerStructures || stripNewerIn != nil {
             // Every save file in the campaign gets the iPad's build stamp, and the
             // structures that build never wrote are taken out of the files that
             // carry them.
             var perFile: [String: [(String, String)]] = [:]
             for entry in newerThanIPad { perFile[entry.file, default: []].append((entry.field, entry.describe)) }
 
-            for name in snapshot.files.keys.sorted() where name.hasSuffix(".json") {
+            for name in snapshot.files.keys.sorted() where name.hasSuffix(".json")
+                && (stripNewerIn == nil || stripNewerIn!.contains(name)) {
                 let data = try rewritten[name] ?? Data(contentsOf: source.appendingPathComponent(name))
                 guard var save = try? SaveFile(data) else {
                     report.leftAlone.append("\(name) could not be read as a save file, so it keeps its original build stamp")
@@ -366,7 +421,7 @@ enum Sanitise {
                 let want = buildStamps[name] ?? iPadBuild
                 if matchIPadBuild, save.build != want { save.build = want; touched = true }
 
-                for (field, _) in (stripNewerStructures ? (perFile[name] ?? []) : []) {
+                for (field, _) in ((stripNewerStructures || stripNewerIn != nil) ? (perFile[name] ?? []) : []) {
                     let n = save.removeAll(named: field)
                     if n > 0 { report.strippedNewer[field, default: 0] += n; touched = true }
                 }
@@ -390,7 +445,7 @@ enum Sanitise {
             }
         }
 
-        if snapshot.files["persist.estate.json"] != nil {
+        if stripNewerStructures, snapshot.files["persist.estate.json"] != nil {
             let url = source.appendingPathComponent("persist.estate.json")
             if let data = try? rewritten["persist.estate.json"] ?? Data(contentsOf: url),
                var save = try? SaveFile(data) {
@@ -412,7 +467,7 @@ enum Sanitise {
 
         // The novelty tracker notes each trinket the player has seen, by name, as
         // the field itself rather than as a value in a list.
-        if snapshot.files["novelty_tracker.json"] != nil {
+        if stripNewerStructures, snapshot.files["novelty_tracker.json"] != nil {
             let url = source.appendingPathComponent("novelty_tracker.json")
             if let data = try? rewritten["novelty_tracker.json"] ?? Data(contentsOf: url),
                var save = try? SaveFile(data) {
@@ -432,7 +487,24 @@ enum Sanitise {
             }
         }
 
-        for rule in switchedOffContent {
+        if let known = knownUpgradeTrees, !known.isEmpty, snapshot.files["persist.upgrades.json"] != nil {
+            let url = source.appendingPathComponent("persist.upgrades.json")
+            if let data = try? rewritten["persist.upgrades.json"] ?? Data(contentsOf: url),
+               var save = try? SaveFile(data) {
+                let n = trimUpgrades(&save, keeping: known)
+                if n > 0 {
+                    let out = save.serialized()
+                    guard let check = try? SaveFile(out), check.serialized() == out, check.inconsistencies().isEmpty else {
+                        throw SanitiseFailure.inconsistent("persist.upgrades.json", "removing unknown upgrade trees left it unsound")
+                    }
+                    rewritten["persist.upgrades.json"] = out
+                    report.removed.append("\(n) building upgrades bought in trees the iPad has never recorded")
+                    if !report.changedFiles.contains("persist.upgrades.json") { report.changedFiles.append("persist.upgrades.json") }
+                }
+            }
+        }
+
+        for rule in switchedOffContent where stripNewerStructures {
             guard snapshot.files[rule.file] != nil else { continue }
             let url = source.appendingPathComponent(rule.file)
             guard let data = try? rewritten[rule.file] ?? Data(contentsOf: url),
@@ -448,7 +520,8 @@ enum Sanitise {
             if !report.changedFiles.contains(rule.file) { report.changedFiles.append(rule.file) }
         }
 
-        if stripNewerStructures, snapshot.files["persist.roster.json"] != nil {
+        if stripNewerStructures || (stripNewerIn?.contains("persist.roster.json") ?? false),
+           snapshot.files["persist.roster.json"] != nil {
             let url = source.appendingPathComponent("persist.roster.json")
             if let data = try? rewritten["persist.roster.json"] ?? Data(contentsOf: url),
                var save = try? SaveFile(data) {
