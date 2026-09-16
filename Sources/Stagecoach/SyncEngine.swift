@@ -29,8 +29,11 @@ struct SyncConfig {
     var steamHelper: URL?              // stagecoach-cli; the push runs there so the process can exit
     var archiveExports = true
     var cloudPush = true
+    var startSteamForPush = false     // open Steam when a save is waiting to reach it
     var quietSeconds: TimeInterval = 5
     var gameIsRunning: () -> Bool = { Processes.gameIsRunning }
+    var startSteam: () -> Void = { Processes.startSteam() }
+    var quitSteam: () -> Void = { Processes.quitSteam() }
     var steamIsRunning: () -> Bool = { Processes.steamIsRunning }
     var now: () -> Date = { Date() }
 }
@@ -55,6 +58,7 @@ struct SyncStatus: Equatable {
     var exportsStuck: [String] = []          // consumed exports still inside Apps/DarkestDungeon
     var waitingForGameToQuit = false
     var iPadLastExported: Date?              // when the iPad last sent anything at all
+    var waitingForSteam = false              // a save is ready for Steam Cloud, but Steam is closed
     var lastTick: Date?
     var lastError: String?
 }
@@ -66,6 +70,9 @@ final class SyncEngine {
     private let queue = DispatchQueue(label: "stagecoach.engine")
     private var stability: [String: (signature: String, since: Date)] = [:]
     private var reportedMissingAddOns: Set<String> = []
+    private var askedSteamToStart = false
+    private var weStartedSteam = false
+    private var pushedWhileWeHadSteam = false
     private var pendingRetry: DispatchWorkItem?
 
     var log: (String) -> Void = { print($0) }
@@ -371,6 +378,19 @@ final class SyncEngine {
         // A campaign imported while Steam was closed is sitting on disk with the
         // cloud none the wiser. Steam cannot be written to without its client, so
         // the work waits rather than being lost, and is done the moment it appears.
+        // A save imported while Steam was closed reaches this Mac's disk and goes
+        // no further: the iPad is served by Dropbox, but any other machine on the
+        // account is served by Steam Cloud, and nothing can be written there
+        // without the client. It waits, and is sent the moment Steam appears.
+        let waitingForSteam = ledger.profiles.contains { $0.value.cloudState == "pendingGameLaunch" }
+        st.waitingForSteam = waitingForSteam && !config.steamIsRunning()
+        if waitingForSteam, config.cloudPush, config.startSteamForPush,
+           !config.steamIsRunning(), !gameRunning, !askedSteamToStart {
+            askedSteamToStart = true
+            weStartedSteam = true
+            log("a save is waiting for Steam Cloud, so Steam is being started")
+            config.startSteam()
+        }
         if config.cloudPush, let lib = config.steamworksLibrary, config.steamIsRunning(), !gameRunning {
             for (profile, record) in ledger.profiles where record.cloudState == "pendingGameLaunch" {
                 let dir = steam.appendingPathComponent(profile, isDirectory: true)
@@ -381,11 +401,26 @@ final class SyncEngine {
                     nudgeCloud(library: lib)
                     let pending = waitForUpload(profile: profile, names: Array(snap.files.keys), seconds: 15)
                     ledger.profiles[profile]?.cloudState = pending.isEmpty ? "uploaded" : "pendingUpload"
+                    askedSteamToStart = false
+                    if pending.isEmpty { pushedWhileWeHadSteam = true }
                     log("\(profile): Steam is running now, so the save that was waiting has gone to Steam Cloud")
                 } catch {
                     log("\(profile): Steam is running but the push failed (\(error)); it will be tried again")
                 }
             }
+        }
+
+        // Steam was opened only to carry a save to the cloud. Once Steam's own
+        // record says the upload has landed, it is asked to quit again — but only
+        // if this opened it, and never while a game is running. A Steam the person
+        // opened themselves is left alone.
+        if weStartedSteam, pushedWhileWeHadSteam, config.startSteamForPush,
+           !config.gameIsRunning(),
+           !ledger.profiles.contains(where: { $0.value.cloudState == "pendingGameLaunch" || $0.value.cloudState == "pendingUpload" }) {
+            weStartedSteam = false
+            pushedWhileWeHadSteam = false
+            log("the save has reached Steam Cloud, so Steam is being closed again")
+            config.quitSteam()
         }
 
         ledger.save(to: ledgerURL)

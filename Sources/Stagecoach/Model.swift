@@ -20,6 +20,7 @@ final class Model: ObservableObject {
 
     @Published var archiveExports: Bool { didSet { defaults.set(archiveExports, forKey: "archiveExports"); rebuild() } }
     @Published var cloudPush: Bool { didSet { defaults.set(cloudPush, forKey: "cloudPush"); rebuild() } }
+    @Published var startSteamForPush: Bool { didSet { defaults.set(startSteamForPush, forKey: "startSteamForPush"); rebuild() } }
     @Published var launchAtLogin: Bool { didSet { setLaunchAtLogin(launchAtLogin) } }
 
     private let defaults = UserDefaults.standard
@@ -31,6 +32,7 @@ final class Model: ObservableObject {
     init() {
         archiveExports = defaults.object(forKey: "archiveExports") as? Bool ?? true
         cloudPush = defaults.object(forKey: "cloudPush") as? Bool ?? true
+        startSteamForPush = defaults.object(forKey: "startSteamForPush") as? Bool ?? false
         launchAtLogin = SMAppService.mainApp.status == .enabled
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         rebuild()
@@ -97,6 +99,7 @@ final class Model: ObservableObject {
                                 steamworksLibrary: steamworksLibrary)
         config.archiveExports = archiveExports
         config.cloudPush = cloudPush
+        config.startSteamForPush = startSteamForPush
         config.steamHelper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/stagecoach-cli")
         if !FileManager.default.isExecutableFile(atPath: config.steamHelper!.path) { config.steamHelper = nil }
         let engine = SyncEngine(config: config)

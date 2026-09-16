@@ -152,6 +152,10 @@ struct PanelView: View {
                 Label("Waiting for Dropbox to finish downloading \(model.status.waitingForDownload.joined(separator: ", "))", systemImage: "icloud.and.arrow.down")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if model.status.waitingForSteam {
+                Label("A save is ready for Steam Cloud, but Steam is closed. Your iPad is unaffected; this is what reaches your other Steam machines.", systemImage: "cloud")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if model.status.waitingForGameToQuit {
                 Label("An iPad save is waiting; it goes in when Darkest Dungeon quits.", systemImage: "gamecontroller")
                     .font(.caption).foregroundStyle(.orange)
@@ -209,7 +213,7 @@ struct PanelView: View {
     func cloudText(_ p: ProfileStatus) -> String {
         switch p.record?.cloudState {
         case "uploaded": return "up to date"
-        case "pendingGameLaunch": return "at next launch"
+        case "pendingGameLaunch": return "waiting for Steam"
         case "pendingUpload": return "uploading…"
         default: return "–"
         }
@@ -261,6 +265,9 @@ struct SettingsView: View {
                 Text("Needs Steam running. Otherwise the files are copied in place and Steam Cloud picks them up when the game next launches.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Every campaign is published with two small edits that let the iPad open it: one record the newer build writes into the campaign log, and the Butcher's Circus in the list of add-ons you have been shown. Nothing else is changed, and your Steam saves are never touched.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Toggle("Open Steam when a save is waiting, and close it afterwards", isOn: $model.startSteamForPush)
+                Text("Off by default. Steam Cloud is how a save reaches your other Steam machines, and nothing can be written to it without the client running. With this on, Steam is opened in the background when a save is waiting and asked to quit once Steam's own record says the upload has landed. A Steam you opened yourself is left alone, and neither happens while a game is running. Either way the iPad is served by Dropbox and needs no Steam at all.")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("Move consumed iPad exports out of Apps/DarkestDungeon", isOn: $model.archiveExports)
                 Text("The iPad's Import hangs if an export folder is left there. Moved exports go to Dropbox/Darkest Dungeon Save Sync/Imported exports.")

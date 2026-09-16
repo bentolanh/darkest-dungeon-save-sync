@@ -9,6 +9,23 @@ enum Processes {
         NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.valvesoftware.steam" }
     }
 
+    /// Opens Steam, without bringing it to the front.
+    static func startSteam() {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.valvesoftware.steam") else { return }
+        let options = NSWorkspace.OpenConfiguration()
+        options.activates = false
+        NSWorkspace.shared.openApplication(at: url, configuration: options)
+    }
+
+    /// Asks Steam to quit, the way choosing Quit from its menu would. Nothing is
+    /// forced: if Steam is busy it declines, and it is left alone.
+    static func quitSteam() {
+        for app in NSWorkspace.shared.runningApplications
+        where app.bundleIdentifier == "com.valvesoftware.steam" {
+            app.terminate()
+        }
+    }
+
     static var gameIsRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { app in
             guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }

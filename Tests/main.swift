@@ -520,6 +520,38 @@ check(!DropboxState.isUploaded(profileDir: dropbox.appendingPathComponent("not_t
       "and a campaign that is not there is not waiting for anything either")
 try? fm.removeItem(at: probe)
 
+print("7j. Steam is opened for a waiting save, and closed again once it has landed")
+clock += 600
+var steamUp = false, started = 0, quit = 0
+var cfg2 = config
+cfg2.cloudPush = true
+cfg2.startSteamForPush = true
+cfg2.steamworksLibrary = root.appendingPathComponent("pretend-libsteam.dylib")
+cfg2.steamIsRunning = { steamUp }
+cfg2.startSteam = { started += 1; steamUp = true }
+cfg2.quitSteam = { quit += 1; steamUp = false }
+let ledger2URL = root.appendingPathComponent("ledger-steam.json")
+var led = Ledger()
+led.profiles["profile_1"] = ProfileRecord(syncedDigest: "d", syncedSaveTime: clock, syncedAt: clock,
+                                          lastSource: "ipad", cloudState: "pendingGameLaunch")
+led.save(to: ledger2URL)
+let steamEngine = SyncEngine(config: cfg2, ledgerURL: ledger2URL)
+steamEngine.log = { _ in }
+steamEngine.syncNow(reason: "a save is waiting for Steam")
+check(started == 1, "Steam is opened for the save that was waiting")
+check(steamEngine.status.waitingForSteam == false, "and is no longer reported as waiting once Steam is up")
+// The push cannot succeed here, so the save stays pending and Steam is left running.
+check(quit == 0, "Steam is not closed while a save is still waiting")
+// Once nothing is waiting, a Steam this opened is closed again.
+var led2 = Ledger.load(from: ledger2URL)
+led2.profiles["profile_1"]?.cloudState = "uploaded"
+led2.save(to: ledger2URL)
+let steamEngine2 = SyncEngine(config: cfg2, ledgerURL: ledger2URL)
+steamEngine2.log = { _ in }
+steamEngine2.syncNow(reason: "nothing waiting now")
+check(started == 1, "Steam is not opened again when nothing is waiting")
+check(quit == 0, "and a Steam this did not open is left alone")
+
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)
 check(engine2.ledger.profiles.keys.sorted() == engine.ledger.profiles.keys.sorted()
