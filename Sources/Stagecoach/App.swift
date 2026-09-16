@@ -71,7 +71,7 @@ struct PanelView: View {
                         Text("Campaign").foregroundStyle(.secondary)
                         Text("Week").foregroundStyle(.secondary)
                         Text("Mac saved").foregroundStyle(.secondary)
-                        Text("Copy in Dropbox").foregroundStyle(.secondary)
+                        Text("Ready to import").foregroundStyle(.secondary)
                         Text("Steam Cloud").foregroundStyle(.secondary)
                     }.font(.caption)
                     ForEach(model.status.profiles) { p in
@@ -80,9 +80,9 @@ struct PanelView: View {
                             Text(p.weeks.map(String.init) ?? "–")
                             Text(p.macNewest.map(Self.date.string) ?? "–")
                             HStack(spacing: 4) {
-                                Image(systemName: p.inStep ? "checkmark.circle.fill" : "clock")
-                                    .foregroundStyle(p.inStep ? .green : .orange)
-                                Text(p.inStep ? "current" : "copying…")
+                                Image(systemName: p.inStep && p.uploaded ? "checkmark.circle.fill" : "clock")
+                                    .foregroundStyle(p.inStep && p.uploaded ? .green : .orange)
+                                Text(!p.inStep ? "copying…" : (p.uploaded ? "yes" : "Dropbox uploading…"))
                             }
                             Text(cloudText(p))
                         }.font(.callout)

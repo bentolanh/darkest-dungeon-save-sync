@@ -507,6 +507,19 @@ var padTest2 = try! SaveFile(town)
 check(padTest2.removeObject(named: "circus", under: "buildings"), "remove an object from the Hamlet")
 check(objectsWithBytes(padTest2.serialized()) == 0, "still none")
 
+// Written into the Dropbox folder is not the same as uploaded. Dropbox leaves a
+// mark on a file once it has taken it in hand, and until then the iPad's Import
+// has nothing to fetch.
+let probe = dropbox.appendingPathComponent("upload_probe")
+try! fm.createDirectory(at: probe, withIntermediateDirectories: true)
+writeSave(probe, "persist.game.json", "x", at: clock)
+check(!DropboxState.isUploaded(probe.appendingPathComponent("persist.game.json")),
+      "a file just written carries no such mark")
+check(!DropboxState.isUploaded(profileDir: probe), "so the campaign is not ready to import")
+check(!DropboxState.isUploaded(profileDir: dropbox.appendingPathComponent("not_there")),
+      "and a campaign that is not there is not waiting for anything either")
+try? fm.removeItem(at: probe)
+
 print("8. Ledger survives a restart")
 let engine2 = SyncEngine(config: config, ledgerURL: ledgerURL)
 check(engine2.ledger.profiles.keys.sorted() == engine.ledger.profiles.keys.sorted()

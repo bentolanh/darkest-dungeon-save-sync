@@ -41,6 +41,7 @@ struct ProfileStatus: Identifiable, Equatable {
     var estate: String?
     var missingAddOns: [String] = []     // add-ons this campaign needs that the iPad has not got
     var weeks: Int?
+    var uploaded = false                 // Dropbox has taken the published copy in hand
     var macNewest: Date?
     var mirrorNewest: Date?
     var inStep: Bool
@@ -332,6 +333,10 @@ final class SyncEngine {
             // state of the campaign it came from, rather than by comparing the two.
             ps.inStep = ledger.publishedFrom[profile] == mac.digest && mirror != nil
             if ps.inStep {
+                // Written is not the same as uploaded. Until Dropbox has taken the
+                // files in hand, an Import on the iPad has nothing to fetch.
+                ps.uploaded = DropboxState.isUploaded(profileDir: mirrorURL)
+                if !ps.uploaded { needRetry = true }
                 if ledger.profiles[profile] == nil {
                     ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
                                                              syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
@@ -352,6 +357,8 @@ final class SyncEngine {
                                                          syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
                 ps.record = ledger.profiles[profile]
                 ps.inStep = true
+                ps.uploaded = DropboxState.isUploaded(profileDir: dropbox.appendingPathComponent(profile, isDirectory: true))
+                if !ps.uploaded { needRetry = true }
                 ps.mirrorNewest = Snapshot.read(mirrorURL)?.newestModified
                 let what = report.removed.isEmpty ? "" : " (\(report.removed.joined(separator: "; ")))"
                 log("\(ps.estate ?? profile): copied to Dropbox for the iPad\(what)")
