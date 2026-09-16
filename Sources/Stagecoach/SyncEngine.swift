@@ -360,8 +360,11 @@ final class SyncEngine {
                                                to: dropbox.appendingPathComponent(profile, isDirectory: true),
                                                snapshot: mac)
                 ledger.publishedFrom[profile] = mac.digest
+                // Copying to Dropbox is for the iPad and says nothing about Steam
+                // Cloud. A save still waiting for Steam must go on saying so.
                 ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),
-                                                         syncedAt: config.now(), lastSource: "mac", cloudState: "uploaded")
+                                                         syncedAt: config.now(), lastSource: "mac",
+                                                         cloudState: ledger.profiles[profile]?.cloudState ?? "uploaded")
                 ps.record = ledger.profiles[profile]
                 ps.inStep = true
                 ps.uploaded = DropboxState.isUploaded(profileDir: dropbox.appendingPathComponent(profile, isDirectory: true))
@@ -383,7 +386,6 @@ final class SyncEngine {
         // account is served by Steam Cloud, and nothing can be written there
         // without the client. It waits, and is sent the moment Steam appears.
         let waitingForSteam = ledger.profiles.contains { $0.value.cloudState == "pendingGameLaunch" }
-        st.waitingForSteam = waitingForSteam && !config.steamIsRunning()
         if waitingForSteam, config.cloudPush, config.startSteamForPush,
            !config.steamIsRunning(), !gameRunning, !askedSteamToStart {
             askedSteamToStart = true
@@ -409,6 +411,11 @@ final class SyncEngine {
                 }
             }
         }
+
+        // Reported at the end, so it reflects what is true once this pass has done
+        // whatever it was going to do about it.
+        st.waitingForSteam = ledger.profiles.contains { $0.value.cloudState == "pendingGameLaunch" }
+            && !config.steamIsRunning()
 
         // Steam was opened only to carry a save to the cloud. Once Steam's own
         // record says the upload has landed, it is asked to quit again — but only
