@@ -29,20 +29,35 @@ does that, both directions, without being asked.
 
 ## Installing it
 
-Download `Stagecoach.app.zip` from the
+Download `Stagecoach.dmg` from the
 [latest release](https://github.com/bentolanh/darkest-dungeon-save-sync/releases/latest),
-unzip it, and move **Stagecoach** to your Applications folder.
+open it, and drag **Stagecoach** onto the Applications folder beside it.
 
-The first time you open it, macOS will refuse: the app is signed ad hoc rather
-than by a paid Apple developer account, and anything downloaded is quarantined.
-Either is enough to get past it:
+Then expect macOS to refuse to open it, and **do not click Move to Trash**. The
+app is signed ad hoc rather than by a paid Apple developer account, so it is not
+notarised, and anything downloaded from the internet is checked against that.
+The warning says Apple cannot verify the app is free of malware. It is what
+macOS says about every unnotarised app; it is not a finding about this one.
 
-- **Right-click the app and choose Open**, then Open again in the dialogue. You
-  only do this once.
-- Or, in a terminal: `xattr -d com.apple.quarantine /Applications/Stagecoach.app`
+Getting past it, on macOS 15 and later:
 
-If you would rather not run an unsigned binary, build it yourself — it takes
-about a minute and needs nothing but Apple's own tools.
+1. Double-click the app. On the warning, click **Done**.
+2. Open **System Settings → Privacy & Security** and scroll down. There is a
+   line saying Stagecoach was blocked, with an **Open Anyway** button.
+3. Click it, authenticate, and confirm. You only do this once.
+
+Or, in a terminal, which does the same thing in one step:
+
+```bash
+xattr -d com.apple.quarantine /Applications/Stagecoach.app
+```
+
+Right-clicking the app and choosing Open used to work and no longer does: macOS
+15 removed that shortcut for apps that are not notarised.
+
+Notarising it properly needs an Apple Developer account at $99 a year. If you
+would rather not run an unsigned binary, build it yourself — it takes about a
+minute and needs nothing but Apple's own tools.
 
 ## Building it
 
@@ -55,7 +70,8 @@ Needs the Xcode Command Line Tools (`xcode-select --install`) and nothing else.
 That produces `build/Stagecoach.app` and `build/stagecoach-cli`. Move the app to
 `/Applications` and turn on **Launch at login** in its settings.
 
-Run the tests with `./run_tests.sh`.
+Run the tests with `./run_tests.sh`, and `./package.sh` to wrap the built app in
+a `Stagecoach.dmg` the way the releases are made.
 
 ## Setting it up
 
