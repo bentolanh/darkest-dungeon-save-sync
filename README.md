@@ -121,8 +121,11 @@ up first.
 ## Two campaigns, and which is further on
 
 Campaigns are matched by estate name, not by slot number, because the iPad puts
-every imported campaign in a fresh slot and exports every slot it has. An export
-holding three copies of one estate collapses to one.
+every imported campaign in a fresh slot and exports every slot it has. The
+estate name is fixed when the campaign is founded and cannot be edited in the
+game, which is what makes it dependable: however many slots an export carries,
+copies of one estate are still recognised as one campaign and collapse to the
+furthest on.
 
 Which copy is further on is decided by **weeks played**, read from the campaign
 log, then by whether the party is **out on an expedition** rather than back in
@@ -183,16 +186,6 @@ Steam Cloud needs the Steam client running; nothing can be written to it
 otherwise. A save imported while Steam is closed waits, and is sent when Steam
 next appears. There is a setting to open Steam for that errand and close it
 again.
-
-The app cannot see the iPad. It learns what is there only when an export
-arrives, and it cannot reach into the iPad's own slot list: Import always adds a
-new slot, and deleting the one it replaced has to be done in the game.
-
-Everything on the Dropbox side is the app's own housekeeping. An export holding
-nine slots is merged down by estate name, and the folder is then moved to
-`Imported exports/` once it has been taken in, so the next export arrives in a
-clean Apps/DarkestDungeon and the iPad's Import has only campaigns to list.
-Nothing is deleted; the consumed export is kept where you can still reach it.
 
 Playing on the iPad without importing first, and without exporting afterwards,
 leaves progress nothing else knows about. Exporting when you stop closes that.
