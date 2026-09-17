@@ -24,6 +24,20 @@ struct Conflict: Codable, Equatable, Identifiable {
     var firstMeeting = false       // never synced before, rather than both having moved
 }
 
+/// A campaign Steam Cloud still holds that this Mac no longer has on disk.
+///
+/// Deleting a slot with the Finder only takes the local copy: the client keeps
+/// its own, and puts it back — or argues about it — at the next launch. Either
+/// the slot was meant to go, in which case the cloud should be told, or it was
+/// not, in which case it can be fetched back. Both are the person's call, so
+/// this is only ever raised, never acted on.
+struct Orphan: Codable, Equatable, Identifiable {
+    var id: String { profile }
+    var profile: String
+    var files: Int
+    var noticedAt: Date
+}
+
 struct Ledger: Codable, Equatable {
     var profiles: [String: ProfileRecord] = [:]
     var processedExports: [String] = []          // export folders already consumed
@@ -32,6 +46,11 @@ struct Ledger: Codable, Equatable {
     /// Slots whose published copy was cleaned for the iPad, and the Mac digest it
     /// was made from. Kept across restarts so a prepared copy is not re-flagged.
     var publishedFrom: [String: String] = [:]
+    /// Campaigns in Steam Cloud with no folder on this Mac, and what was decided
+    /// about them: "forget" removes the cloud copy, "keep" leaves it alone and
+    /// stops the asking.
+    var orphans: [Orphan] = []
+    var orphanChoices: [String: String] = [:]
 
     static let url = Paths.supportDir.appendingPathComponent("ledger.json")
 

@@ -122,6 +122,8 @@ final class Model: ObservableObject {
 
     func resolve(_ c: Conflict, keep: String) { engine?.resolve(conflict: c.id, keep: keep) }
 
+    func decide(_ o: Orphan, choice: String) { engine?.decide(orphan: o.profile, choice: choice) }
+
     func retryArchive() { engine?.retryArchive() }
 
     func refreshProcesses() {

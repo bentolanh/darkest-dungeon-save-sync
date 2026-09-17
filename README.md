@@ -96,7 +96,7 @@ finished uploading, not merely when the file was written.
 
 ### When it needs you
 
-A card appears above the table. There are three kinds.
+A card appears above the table. There are four kinds.
 
 A campaign using add-ons the iPad has not got gets a grey note. It still goes
 over; the iPad offers to take that content out of its own copy, and the Mac save
@@ -108,6 +108,17 @@ overwritten until you choose, and whichever loses is in the backups folder.
 
 If an export comes back with its add-on content stripped, it stops and asks
 rather than carrying that loss onto the Mac.
+
+If Steam Cloud still holds a slot this Mac hasn't got, an orange card offers
+**Remove it from Steam Cloud** or **Leave it**. Deleting a campaign folder here
+only ever takes the local copy — the client keeps its own, and at the next
+launch either puts the slot back or stops to ask which side is right. Removing
+it reads the cloud's copy into the backups folder before deleting anything,
+because by then it is usually the last copy there is. Leaving it ends the
+asking, and Steam restores the slot in its own time. Nothing happens on its own,
+and nothing at all is judged on a Mac with no campaigns on it: an empty folder
+looks the same whether every slot was deleted or Steam simply hasn't finished
+downloading, and being wrong about which would empty the cloud.
 
 ### What it will not do
 
@@ -170,7 +181,9 @@ add-ons <dir>                 which add-ons a campaign uses and has been shown
 codec-check <dir>             read and verify every save file under a folder
 steam-check                   open a Steam session and list the cloud files
 steam-push profile_N          write a campaign to Steam Cloud
-steam-forget profile_N        remove a campaign from Steam Cloud
+steam-orphans                 campaigns in the cloud with no folder on this Mac
+steam-forget profile_N [--backup <dir>]
+                              remove a campaign from Steam Cloud
 sync                          one pass with the real folders
 ```
 

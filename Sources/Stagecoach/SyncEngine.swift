@@ -59,6 +59,7 @@ struct SyncStatus: Equatable {
     var waitingForGameToQuit = false
     var iPadLastExported: Date?              // when the iPad last sent anything at all
     var waitingForSteam = false              // a save is ready for Steam Cloud, but Steam is closed
+    var orphans: [Orphan] = []               // slots the cloud still holds that this Mac has not got
     var lastTick: Date?
     var lastError: String?
 }
@@ -105,6 +106,17 @@ final class SyncEngine {
         }
     }
 
+    /// "forget" removes the cloud's copy; "keep" leaves it, and Steam puts the
+    /// slot back on disk at the next launch.
+    func decide(orphan profile: String, choice: String) {
+        queue.async {
+            self.ledger.orphanChoices[profile] = choice
+            self.ledger.orphans.removeAll { $0.profile == profile }
+            self.ledger.save(to: self.ledgerURL)
+            self.tick(reason: "orphan \(profile): \(choice)")
+        }
+    }
+
     // MARK: - One pass
 
     private func tick(reason: String) {
@@ -112,6 +124,7 @@ final class SyncEngine {
         var st = SyncStatus(lastTick: config.now())
         defer {
             st.conflicts = ledger.conflicts
+            st.orphans = ledger.orphans
             st.exportsStuck = archiveFailures
             status = st
             statusChanged(st)
@@ -378,6 +391,24 @@ final class SyncEngine {
             }
         }
 
+        // 3. Slots this Mac no longer has that Steam Cloud still holds. Only
+        // noticed here and raised; what should happen to them is not a thing to
+        // guess at.
+        noticeCloudOrphans(steam: steam)
+        if config.cloudPush, let lib = config.steamworksLibrary, config.steamIsRunning(), !gameRunning {
+            for (slot, choice) in ledger.orphanChoices.sorted(by: { $0.key < $1.key }) where choice == "forget" {
+                do {
+                    let result = try forgetInCloud(profile: slot, library: lib)
+                    ledger.orphanChoices[slot] = "forgotten"
+                    ledger.profiles.removeValue(forKey: slot)
+                    log("\(slot): removed from Steam Cloud (\(result.removed) of \(result.total) files; \(result.backedUp) kept in Backups first)")
+                    notify("Slot removed from Steam Cloud", "\(slot) is gone from Steam Cloud as well as from this Mac. A copy is in the app's Backups folder.")
+                } catch {
+                    log("\(slot): could not be removed from Steam Cloud (\(error)); it will be tried again")
+                }
+            }
+        }
+
         // A campaign imported while Steam was closed is sitting on disk with the
         // cloud none the wiser. Steam cannot be written to without its client, so
         // the work waits rather than being lost, and is done the moment it appears.
@@ -575,6 +606,65 @@ final class SyncEngine {
             try copyFiles(from: source, snapshot: snapshot, to: target, pruneExtras: false)
         }
         return cloudState
+    }
+
+    /// Campaigns Steam Cloud holds that this Mac has no folder for.
+    ///
+    /// Read from the client's own record rather than by opening a session: a
+    /// session shows the account as playing the game, which is not something to
+    /// do on a timer.
+    private func noticeCloudOrphans(steam: URL) {
+        let fm = FileManager.default
+        // Never on a Mac that has not finished downloading. An empty remote
+        // folder looks exactly like one whose every slot was deleted, and being
+        // wrong about which empties the cloud.
+        guard !profileFolders(in: steam).isEmpty else { ledger.orphans = []; return }
+
+        let cache = steam.deletingLastPathComponent().appendingPathComponent("remotecache.vdf")
+        let entries = SteamCache.entries(in: cache)
+        guard !entries.isEmpty else { ledger.orphans = []; return }
+
+        // Any folder counts as present, campaign or not: the Butcher's Circus
+        // keeps a profile_9 with no campaign in it, and it is not an orphan.
+        let present = Set(((try? fm.contentsOfDirectory(atPath: steam.path)) ?? [])
+            .filter { $0.hasPrefix("profile_") })
+
+        // A slot that is back on disk is no longer a question, and the decision
+        // about it goes too, so deleting it again is noticed afresh.
+        for slot in present { ledger.orphanChoices.removeValue(forKey: slot) }
+
+        var found: [Orphan] = []
+        for slot in SteamCache.cloudProfiles(in: cache).sorted() where !present.contains(slot) {
+            let files = entries.filter { $0.name.hasPrefix(slot + "/") }.count
+            guard files > 0, ledger.orphanChoices[slot] == nil else { continue }
+            let known = ledger.orphans.first { $0.profile == slot }
+            found.append(Orphan(profile: slot, files: files, noticedAt: known?.noticedAt ?? config.now()))
+        }
+        ledger.orphans = found
+    }
+
+    private func forgetInCloud(profile: String, library: URL) throws -> CloudTidy.Result {
+        let backup = config.backupsFolder.appendingPathComponent(
+            "cloud-\(profile)-\(Self.stampFormatter.string(from: config.now()))", isDirectory: true)
+        if let helper = config.steamHelper {
+            let p = Process()
+            p.executableURL = helper
+            p.arguments = ["steam-forget", profile, "--backup", backup.path]
+            let out = Pipe(); p.standardOutput = out; p.standardError = out
+            try p.run()
+            p.waitUntilExit()
+            let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            guard p.terminationStatus == 0 else {
+                throw SteamCloudError.writeFailed(text.split(separator: "\n").last.map(String.init) ?? "helper failed")
+            }
+            let n = text.split(separator: "\n").last.flatMap { line in
+                line.split(separator: " ").compactMap { Int($0) }.first
+            } ?? 0
+            return CloudTidy.Result(backedUp: n, removed: n, total: n)
+        }
+        let session = try SteamCloudSession(library: library)
+        defer { session.close() }
+        return try CloudTidy.forget(profile: profile, in: session, backupTo: backup)
     }
 
     private func pushToCloud(profile: String, folder: URL, snapshot: Snapshot, library: URL) throws {

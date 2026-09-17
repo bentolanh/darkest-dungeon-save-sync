@@ -562,6 +562,85 @@ if let a = engine.ledger.profiles["profile_1"]?.syncedSaveTime, let b = engine2.
     check(abs(a.timeIntervalSince(b)) < 0.001, "save times survive the round trip to within a millisecond")
 }
 
+print("9. Slots Steam Cloud still holds that this Mac has not got")
+// Steam's own record of the cloud. The outer block is the app id; the blocks
+// inside it are named for files, which is how the two are told apart.
+func remoteCache(_ files: [(String, String, String)]) -> String {
+    var out = "\"262060\"\n{\n"
+    for (name, sync, persist) in files {
+        out += "\t\"\(name)\"\n\t{\n"
+        out += "\t\t\"root\"\t\t\"0\"\n\t\t\"size\"\t\t\"128\"\n"
+        out += "\t\t\"syncstate\"\t\t\"\(sync)\"\n\t\t\"persiststate\"\t\t\"\(persist)\"\n\t}\n"
+    }
+    return out + "}\n"
+}
+
+let oRoot = root.appendingPathComponent("orphans")
+let oSteam = oRoot.appendingPathComponent("remote")
+let oCache = oRoot.appendingPathComponent("remotecache.vdf")
+let oLedger = oRoot.appendingPathComponent("ledger.json")
+try! fm.createDirectory(at: oSteam, withIntermediateDirectories: true)
+
+// On disk: one campaign, and the Butcher's Circus folder, which holds no
+// campaign but is a folder all the same.
+makeProfile(oSteam.appendingPathComponent("profile_0"), game: "here", roster: "r", at: clock)
+write(oSteam.appendingPathComponent("profile_9"), "persist.rankings.json", "arena", at: clock)
+
+let cloudList = [("profile_0/persist.game.json", "1", "0"),
+                 ("profile_0/persist.roster.json", "1", "0"),
+                 ("profile_4/persist.game.json", "3", "2"),
+                 ("profile_4/backup/persist.game.json", "4", "2"),
+                 ("profile_9/persist.rankings.json", "1", "0"),
+                 ("steam_init.json", "1", "0")]
+try! remoteCache(cloudList).write(to: oCache, atomically: true, encoding: .utf8)
+
+check(SteamCache.entries(in: oCache).count == cloudList.count, "every file in the cache is read, and the app id is not one of them")
+check(SteamCache.pendingFiles(in: oCache).sorted() == ["profile_4/backup/persist.game.json", "profile_4/persist.game.json"], "pending files are still found the old way")
+check(SteamCache.cloudProfiles(in: oCache) == ["profile_0", "profile_4", "profile_9"], "profiles are picked out of the file names")
+
+var oConfig = SyncConfig(steamRemote: oSteam, dropboxFolder: dropbox, archiveFolder: nil, backupsFolder: backups, steamworksLibrary: nil)
+oConfig.cloudPush = false
+oConfig.gameIsRunning = { false }
+oConfig.steamIsRunning = { false }
+oConfig.now = { clock }
+var oEngine = SyncEngine(config: oConfig, ledgerURL: oLedger)
+oEngine.log = { _ in }
+oEngine.syncNow(reason: "orphans")
+check(oEngine.status.orphans.map(\.profile) == ["profile_4"], "the slot with no folder here is raised")
+check(oEngine.status.orphans.first?.files == 2, "and counted")
+
+// profile_9 has no campaign in it, but it is on disk, so it is nobody's orphan.
+check(!oEngine.status.orphans.contains { $0.profile == "profile_9" }, "the arena folder is not mistaken for a deleted slot")
+
+print("   a Mac that has not finished downloading is not judged")
+let eRoot = root.appendingPathComponent("empty")
+let eSteam = eRoot.appendingPathComponent("remote")
+try! fm.createDirectory(at: eSteam, withIntermediateDirectories: true)
+try! remoteCache(cloudList).write(to: eRoot.appendingPathComponent("remotecache.vdf"), atomically: true, encoding: .utf8)
+var eConfig = oConfig
+eConfig.steamRemote = eSteam
+let eEngine = SyncEngine(config: eConfig, ledgerURL: eRoot.appendingPathComponent("ledger.json"))
+eEngine.log = { _ in }
+eEngine.syncNow(reason: "nothing downloaded yet")
+check(eEngine.status.orphans.isEmpty, "no campaign on disk at all means no judgement about the cloud")
+
+print("   a decision is remembered, and forgotten when the slot comes back")
+oEngine.decide(orphan: "profile_4", choice: "keep")
+oEngine.syncNow(reason: "after keeping")
+check(oEngine.status.orphans.isEmpty, "leaving it alone stops the asking")
+oEngine = SyncEngine(config: oConfig, ledgerURL: oLedger)
+oEngine.log = { _ in }
+oEngine.syncNow(reason: "after a restart")
+check(oEngine.status.orphans.isEmpty, "and is still stopped after a restart")
+
+makeProfile(oSteam.appendingPathComponent("profile_4"), game: "back", roster: "r", at: clock)
+oEngine.syncNow(reason: "slot restored")
+check(oEngine.status.orphans.isEmpty, "a slot that is back is not an orphan")
+check(Ledger.load(from: oLedger).orphanChoices["profile_4"] == nil, "and the old decision goes with it")
+try! fm.removeItem(at: oSteam.appendingPathComponent("profile_4"))
+oEngine.syncNow(reason: "deleted again")
+check(oEngine.status.orphans.map(\.profile) == ["profile_4"], "so deleting it again is asked about afresh")
+
 try? fm.removeItem(at: root)
 print(failures == 0 ? "\nAll checks passed." : "\n\(failures) check(s) failed.")
 exit(failures == 0 ? 0 : 1)

@@ -4,6 +4,7 @@
 //   stagecoach-cli scan               what was detected, and the state of each side
 //   stagecoach-cli steam-check        open a Steam session as Darkest Dungeon and list cloud files
 //   stagecoach-cli steam-write-test   read steam_init.json from the cloud and write it back unchanged
+//   stagecoach-cli steam-orphans      campaigns in the cloud with no folder on this Mac
 //   stagecoach-cli sync               run one sync pass with the real folders and ledger
 //   stagecoach-cli codec-check <dir>  read and rewrite every save under a folder, byte for byte
 //   stagecoach-cli prepare <profile_N> [--like <iPad profile dir>] [--rename <name>]
@@ -168,19 +169,48 @@ case "steam-forget":
     // Removes a campaign from Steam Cloud as well as from disk. Deleting the
     // files alone is not enough: the client holds its own copy and puts them
     // back at the next launch.
-    guard args.count >= 2 else { print("usage: stagecoach-cli steam-forget profile_N"); exit(2) }
+    //
+    // With --backup the cloud's copy is read down to a folder before anything is
+    // deleted. Worth doing: by the time a slot is an orphan, the cloud's copy is
+    // usually the only one left.
+    guard args.count >= 2 else { print("usage: stagecoach-cli steam-forget profile_N [--backup <dir>]"); exit(2) }
     let slot = args[args.startIndex + 1]
+    var backup: URL?
+    if let i = args.firstIndex(of: "--backup"), args.index(after: i) < args.endIndex {
+        backup = URL(fileURLWithPath: args[args.index(after: i)])
+    }
     guard let lib = Paths.detectSteamworksLibrary() else { print("no libsteam_api.dylib found"); exit(1) }
     guard !Processes.gameIsRunning else { print("Darkest Dungeon is running; quit it first"); exit(1) }
     do {
         let session = try SteamCloudSession(library: lib)
-        let names = session.list().map(\.name).filter { $0.hasPrefix(slot + "/") }
-        var gone = 0
-        for name in names where session.delete(name) { gone += 1 }
+        let result = try CloudTidy.forget(profile: slot, in: session, backupTo: backup)
         session.close()
         SteamCloudSession.nudge(library: lib)
-        print("\(slot): removed \(gone) of \(names.count) files from Steam Cloud")
+        if let backup, result.backedUp > 0 { print("\(slot): \(result.backedUp) file(s) copied to \(backup.path)") }
+        print("\(result.removed) of \(result.total) files removed from Steam Cloud")
     } catch { print("failed: \(error)"); exit(1) }
+
+case "steam-orphans":
+    // Campaigns the client's own record says are in the cloud, with no folder
+    // for them on this Mac. Reads remotecache.vdf; opens no session.
+    guard let steam = Paths.detectSteamRemote() else { print("no Steam save folder found"); exit(1) }
+    let cache = steam.deletingLastPathComponent().appendingPathComponent("remotecache.vdf")
+    let entries = SteamCache.entries(in: cache)
+    guard !entries.isEmpty else { print("no cloud record at \(cache.path)"); exit(1) }
+    let here = Set(((try? FileManager.default.contentsOfDirectory(atPath: steam.path)) ?? [])
+        .filter { $0.hasPrefix("profile_") })
+    let orphans = SteamCache.cloudProfiles(in: cache).subtracting(here).sorted()
+    if profileFolders(in: steam).isEmpty {
+        print("no campaign on this Mac at all — not judging the cloud from that")
+        exit(0)
+    }
+    if orphans.isEmpty { print("nothing in Steam Cloud that this Mac has not got"); exit(0) }
+    for slot in orphans {
+        let files = entries.filter { $0.name.hasPrefix(slot + "/") }
+        let deleted = files.filter(\.isDeletedLocally).count
+        print("\(slot): \(files.count) file(s) in Steam Cloud, none on disk" +
+              (deleted > 0 ? " (\(deleted) already marked deleted here)" : ""))
+    }
 
 case "rename":
     // Renames the estate in a campaign folder, in place. Several copies of one
@@ -231,6 +261,6 @@ case "sync":
     if let e = st.lastError { print("error: \(e)") }
 
 default:
-    print("usage: stagecoach-cli scan | steam-check | steam-write-test | steam-push profile_N [folder] | codec-check [dir] | prepare profile_N | sync")
+    print("usage: stagecoach-cli scan | steam-check | steam-write-test | steam-push profile_N [folder] | steam-orphans | steam-forget profile_N [--backup <dir>] | codec-check [dir] | prepare profile_N | rename <dir> <name> | sync")
     exit(2)
 }

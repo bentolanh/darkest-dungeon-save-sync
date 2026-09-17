@@ -123,6 +123,10 @@ struct PanelView: View {
                 ConflictView(conflict: c)
             }
 
+            ForEach(model.status.orphans) { o in
+                OrphanView(orphan: o)
+            }
+
             if !model.status.profiles.isEmpty {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 4) {
                     GridRow {
@@ -241,6 +245,28 @@ struct ConflictView: View {
             HStack {
                 Button("Keep the iPad save") { model.resolve(conflict, keep: "ipad") }
                 Button("Keep the Mac save") { model.resolve(conflict, keep: "mac") }
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
+    }
+}
+
+struct OrphanView: View {
+    @EnvironmentObject var model: Model
+    let orphan: Orphan
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Steam Cloud still has \(orphan.profile), which this Mac has not got",
+                  systemImage: "icloud.slash")
+                .foregroundStyle(.orange).font(.callout.bold())
+            Text("\(orphan.files) files, and no folder for them here. Deleting a slot on this Mac does not take the cloud's copy: Steam puts it back at the next launch, or stops to ask which side is right. Removing it copies the cloud's version into the app's Backups folder first."
+                 + (model.steamRunning ? "" : " Steam is closed, so this waits until it is open."))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Remove it from Steam Cloud") { model.decide(orphan, choice: "forget") }
+                Button("Leave it") { model.decide(orphan, choice: "keep") }
             }
         }
         .padding(10)
