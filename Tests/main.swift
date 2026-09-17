@@ -562,6 +562,24 @@ if let a = engine.ledger.profiles["profile_1"]?.syncedSaveTime, let b = engine2.
     check(abs(a.timeIntervalSince(b)) < 0.001, "save times survive the round trip to within a millisecond")
 }
 
+print("8b. A copy in Dropbox that has lost a file is published again")
+// The record alone would call this published forever, and the iPad would import
+// the gap. Deleting one file from the mirror must bring it back.
+let mirrorDir = dropbox.appendingPathComponent("profile_1")
+let beforeNames = Set(Snapshot.read(mirrorDir)!.files.keys)
+check(beforeNames.count > 1, "the published copy has more than one file to lose")
+let victim = beforeNames.sorted().first!
+try! fm.removeItem(at: mirrorDir.appendingPathComponent(victim))
+check(Snapshot.read(mirrorDir)!.files[victim] == nil, "one file removed from the Dropbox copy")
+tick()
+check(Set(Snapshot.read(mirrorDir)!.files.keys) == beforeNames, "the missing file is published again")
+
+// And an untouched copy is still left alone, rather than republished every pass.
+let settled = engine.ledger.profiles["profile_1"]?.syncedAt
+clock += 60
+tick()
+check(engine.ledger.profiles["profile_1"]?.syncedAt == settled, "a copy that is all there is not republished")
+
 print("9. Slots Steam Cloud still holds that this Mac has not got")
 // Steam's own record of the cloud. The outer block is the app id; the blocks
 // inside it are named for files, which is how the two are told apart.

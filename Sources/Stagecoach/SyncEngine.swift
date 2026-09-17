@@ -295,6 +295,8 @@ final class SyncEngine {
                         // editing, so the outbound pass must not treat it as unpublished
                         // and overwrite the record of where this campaign came from.
                         ledger.publishedFrom[profile] = Snapshot.read(target)?.digest ?? ipad.digest
+                        ledger.publishedFiles[profile] = Snapshot.read(dropbox.appendingPathComponent(profile, isDirectory: true))
+                            .map { Array($0.files.keys) } ?? Array(ipad.files.keys)
                         ledger.profiles[profile] = ProfileRecord(syncedDigest: ipad.digest, syncedSaveTime: saveTime(of: target, snapshot: Snapshot.read(target)),
                                                                  syncedAt: config.now(), lastSource: "ipad", cloudState: cloudState)
                         log("\(label): imported into Steam (\(cloudState == "uploaded" ? "pushed to Steam Cloud" : "Steam Cloud will pick it up when the game next launches"))")
@@ -351,7 +353,25 @@ final class SyncEngine {
             // A published copy is not the Mac save byte for byte: two small edits
             // make it open on the iPad. So what was published is remembered by the
             // state of the campaign it came from, rather than by comparing the two.
-            ps.inStep = ledger.publishedFrom[profile] == mac.digest && mirror != nil
+            //
+            // The folder is still looked at, though. A copy that has lost a file is
+            // not a copy, and the record alone would go on calling it published
+            // forever while the iPad imported the gap. Names are compared rather
+            // than contents: the edits change what is inside a file and never which
+            // files there are, and a Dropbox copy held online-only reads as empty,
+            // so comparing bytes would republish in a loop.
+            // Measured against what was published, not against the Mac save: an
+            // import from the iPad can leave the Steam folder holding a file the
+            // iPad's copy never had, and that is not a damaged copy. A ledger
+            // from before this was recorded knows nothing, so it publishes once.
+            let published = ledger.publishedFiles[profile].map(Set.init)
+            let mirrorNames = mirror.map { Set($0.files.keys) }
+            let mirrorComplete = published != nil && mirrorNames != nil && published == mirrorNames
+            ps.inStep = ledger.publishedFrom[profile] == mac.digest && mirrorComplete
+            if ledger.publishedFrom[profile] == mac.digest, let published, let mirrorNames, published != mirrorNames {
+                let missing = published.subtracting(mirrorNames)
+                log("\(ps.estate ?? profile): the copy in Dropbox has lost \(missing.sorted().joined(separator: ", ")) — publishing it again")
+            }
             if ps.inStep {
                 // Written is not the same as uploaded. Until Dropbox has taken the
                 // files in hand, an Import on the iPad has nothing to fetch.
@@ -373,6 +393,8 @@ final class SyncEngine {
                                                to: dropbox.appendingPathComponent(profile, isDirectory: true),
                                                snapshot: mac)
                 ledger.publishedFrom[profile] = mac.digest
+                ledger.publishedFiles[profile] = Snapshot.read(dropbox.appendingPathComponent(profile, isDirectory: true))
+                    .map { Array($0.files.keys) } ?? Array(mac.files.keys)
                 // Copying to Dropbox is for the iPad and says nothing about Steam
                 // Cloud. A save still waiting for Steam must go on saying so.
                 ledger.profiles[profile] = ProfileRecord(syncedDigest: mac.digest, syncedSaveTime: saveTime(of: target, snapshot: mac),

@@ -46,6 +46,9 @@ struct Ledger: Codable, Equatable {
     /// Slots whose published copy was cleaned for the iPad, and the Mac digest it
     /// was made from. Kept across restarts so a prepared copy is not re-flagged.
     var publishedFrom: [String: String] = [:]
+    /// The file names that copy was made of, so a Dropbox folder that has since
+    /// lost one is noticed rather than trusted on the strength of the record.
+    var publishedFiles: [String: [String]] = [:]
     /// Campaigns in Steam Cloud with no folder on this Mac, and what was decided
     /// about them: "forget" removes the cloud copy, "keep" leaves it alone and
     /// stops the asking.
