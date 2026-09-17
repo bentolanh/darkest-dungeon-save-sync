@@ -1,5 +1,8 @@
 # Stagecoach
 
+[![Latest release](https://img.shields.io/github/v/release/bentolanh/darkest-dungeon-save-sync)](https://github.com/bentolanh/darkest-dungeon-save-sync/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Keeps one Darkest Dungeon campaign moving between Steam on a Mac and the iPad
 version, through the Dropbox folder the iPad's Import and Export use.
 
@@ -23,6 +26,23 @@ does that, both directions, without being asked.
 - **For Steam Cloud only**: Steam running, and any installed Steam game to
   borrow a Steamworks library from. Without these, syncing to the iPad still
   works; only the hop to your other Steam machines waits.
+
+## Installing it
+
+Download `Stagecoach.app.zip` from the
+[latest release](https://github.com/bentolanh/darkest-dungeon-save-sync/releases/latest),
+unzip it, and move **Stagecoach** to your Applications folder.
+
+The first time you open it, macOS will refuse: the app is signed ad hoc rather
+than by a paid Apple developer account, and anything downloaded is quarantined.
+Either is enough to get past it:
+
+- **Right-click the app and choose Open**, then Open again in the dialogue. You
+  only do this once.
+- Or, in a terminal: `xattr -d com.apple.quarantine /Applications/Stagecoach.app`
+
+If you would rather not run an unsigned binary, build it yourself — it takes
+about a minute and needs nothing but Apple's own tools.
 
 ## Building it
 
@@ -170,3 +190,7 @@ Deleting the old slot after importing is yours to do.
 
 Playing on the iPad without importing first, and without exporting afterwards,
 leaves progress nothing else knows about. Exporting when you stop closes that.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).
