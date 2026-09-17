@@ -185,8 +185,14 @@ next appears. There is a setting to open Steam for that errand and close it
 again.
 
 The app cannot see the iPad. It learns what is there only when an export
-arrives, and it cannot tidy the duplicate slots the iPad's Import leaves behind.
-Deleting the old slot after importing is yours to do.
+arrives, and it cannot reach into the iPad's own slot list: Import always adds a
+new slot, and deleting the one it replaced has to be done in the game.
+
+Everything on the Dropbox side is the app's own housekeeping. An export holding
+nine slots is merged down by estate name, and the folder is then moved to
+`Imported exports/` once it has been taken in, so the next export arrives in a
+clean Apps/DarkestDungeon and the iPad's Import has only campaigns to list.
+Nothing is deleted; the consumed export is kept where you can still reach it.
 
 Playing on the iPad without importing first, and without exporting afterwards,
 leaves progress nothing else knows about. Exporting when you stop closes that.
