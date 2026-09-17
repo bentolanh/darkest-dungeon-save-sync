@@ -1,137 +1,172 @@
 # Stagecoach
 
-A menu-bar app that keeps one Darkest Dungeon campaign moving between Steam on
-this Mac and the iPad version, by way of the Dropbox folder the iPad's
-Import/Export uses. Nothing to copy by hand.
+Keeps one Darkest Dungeon campaign moving between Steam on a Mac and the iPad
+version, through the Dropbox folder the iPad's Import and Export use.
 
-## What it does
+The iPad can import and export saves through Dropbox, but doing it by hand is
+fiddly: the folders have to be arranged a particular way, an export left in the
+wrong place makes the next import hang forever, and a Mac save needs two small
+edits before the iPad will open it at all. Stagecoach sits in the menu bar and
+does that, both directions, without being asked.
 
-The iPad game reads and writes `Dropbox/Apps/DarkestDungeon`:
+---
 
-- **Export** on the iPad drops a folder named `<date>_<time>_upload/profile_N/`.
-- **Import** on the iPad lists the `profile_N/` folders sitting directly in
-  `Apps/DarkestDungeon` — and hangs forever if an `_upload` folder is left
-  there (Red Hook's own support article says so).
+## What you need
 
-Steam keeps the Mac's saves in
-`~/Library/Application Support/Steam/userdata/<id>/262060/remote/profile_N/`
-and mirrors that folder to Steam Cloud.
+- **macOS 15 or later.**
+- **Darkest Dungeon, played at least once on this Mac.** Launching it is what
+  makes Steam create the save folder. You do not need to start a campaign — an
+  iPad save will land in the first free slot.
+- **Dropbox**, with an `Apps/DarkestDungeon` folder. The iPad creates it: tap
+  the Dropbox icon on the game's main menu, choose Import, sign in, then close
+  the dialogue. The folder appears and Stagecoach finds it on its own.
+- **For Steam Cloud only**: Steam running, and any installed Steam game to
+  borrow a Steamworks library from. Without these, syncing to the iPad still
+  works; only the hop to your other Steam machines waits.
 
-Stagecoach watches both places:
+## Building it
 
-- **iPad → Mac.** A new export appears → once Dropbox has finished downloading
-  it, the profile goes into the Steam folder. If Steam is running, it is
-  written *through the Steam client* (Steamworks remote storage), so Steam
-  Cloud is updated immediately — no game launch needed. If Steam isn't
-  running, the files are copied in place and Steam Cloud picks them up at the
-  next launch. The Mac save that gets replaced is backed up first. The export
-  folder is then moved to `Dropbox/Darkest Dungeon Save Sync/Imported
-  exports/`, so the iPad's Import keeps working.
-- **Mac → iPad.** The Mac game saves → once the burst of writes is over, the
-  profile is copied to `Apps/DarkestDungeon/profile_N/`. On the iPad, tap the
-  Dropbox icon → Import → pick the campaign → Copy.
-
-Both campaign slots (`profile_0`, `profile_1`, …) are handled; the game's own
-`backup/` subfolder is left alone.
-
-### When both sides have new progress
-
-The app remembers, per slot, the state both sides last agreed on. If an export
-arrives and the Mac save has changed since then — or the export is older than
-the save the Mac already had — it doesn't guess. The menu-bar icon turns into a
-warning sign and the panel offers **Keep the iPad save** / **Keep the Mac
-save**. Whichever loses is still in the backups folder.
-
-On the very first run there is no history yet, so the newer of the two wins
-and the log says which.
-
-### The two edits that let the iPad open a Mac campaign
-
-The iPad runs a build of the game from 2019; Steam's is thousands of builds
-newer. Almost none of that matters. Two things do, and a copy is published with
-both of them changed and nothing else.
-
-The first is in the campaign log. Each chapter holds numbered entries, one per
-thing worth recording about that week, and the newer build writes an extra entry
-carrying a record the iPad's build has never written. Faced with it, the iPad
-refuses the campaign. Removing the record on its own is not enough — the entry
-stays behind holding only its type marker — so the entry goes whole and the
-entries beside it are renumbered.
-
-The second is smaller. The save keeps a record of which add-ons the game has
-shown you, and on a Mac that list names The Butcher's Circus, which never came
-to iOS. Taking that one entry out stops the iPad asking about add-ons it cannot
-provide.
-
-Nothing else is touched, and the Steam saves are never written to.
-
-**How this was found**, since it took a long time and almost every theory along
-the way was wrong. Two experiments settled it, neither of them clever. Playing a
-single week on a campaign the iPad had written produced a save that broke from
-one known action, which gave a before and an after differing by one week instead
-of two unrelated campaigns to compare. Then playing that same week on the iPad
-produced the chapter to hold the Mac's against. The two differed by three fields.
-
-Things that were suspected at length and are **not** the problem: the Butcher's
-Circus building in the Hamlet, the add-on currencies and trinkets in the estate,
-the quests and narration mentioning add-on content, the per-hero fields the
-newer build adds, the upgrade trees the iPad does not know, and the build number
-stamped into each file. A campaign carrying every one of those opens on the iPad
-once the two edits above are made.
-
-A campaign is never held back, either. One asking for add-ons the iPad has not
-got still opens there: the game offers to take that content out, and does. The
-app says so once and publishes anyway.
-
-What it cannot see:What it cannot see:What it cannot see:What it cannot see: whether you actually ran Import on the iPad before playing
-there. If you export from the iPad without having imported the latest Mac
-save, the Mac's progress is replaced (and backed up), the same as it would be
-by hand. Also, merely opening a campaign on the Mac rewrites a few save files,
-which counts as "the Mac changed" — expect a prompt in that case and pick the
-iPad.
-
-## Build
-
-Command Line Tools only:
+Needs the Xcode Command Line Tools (`xcode-select --install`) and nothing else.
 
 ```bash
 ./build.sh
 ```
 
-That produces `build/Stagecoach.app` and `build/stagecoach-cli`. Move the app
-to `/Applications` if you like and turn on **Launch at login** in its settings.
-The engine tests run with `./run_tests.sh`.
+That produces `build/Stagecoach.app` and `build/stagecoach-cli`. Move the app to
+`/Applications` and turn on **Launch at login** in its settings.
 
-## The command-line helper
+Run the tests with `./run_tests.sh`.
+
+## Setting it up
+
+There is no setup. All three folders are found without being told: the Steam
+save folder by looking through the accounts that have used this Mac, Dropbox by
+reading Dropbox's own record of where it keeps itself, and the Steamworks
+library by finding a copy inside an installed game that this Mac can run.
+Settings lets you point at any of them if yours is somewhere unusual.
+
+---
+
+## Using it
+
+**Playing on the Mac.** Quit the game. Within a few seconds the campaign is
+copied to Dropbox. On the iPad: Dropbox icon → Import → pick the campaign →
+Copy.
+
+**Playing on the iPad.** Export to Dropbox when you stop. Stagecoach waits for
+Dropbox to finish downloading, backs up the Mac save it is about to replace,
+writes the new one, and pushes it to Steam Cloud. It then moves the export
+folder aside, because the iPad's Import hangs if one is left there.
+
+Two habits make this reliable: **export when you stop playing on the iPad**, and
+**import before you start**. This Mac only ever hears from the iPad when an
+export arrives, so the panel says when that last was and leaves the judgement to
+you.
+
+### The panel
+
+Click the wheel in the menu bar.
+
+| Campaign | Week | Mac saved | Ready to import | Steam Cloud |
+|---|---|---|---|---|
+
+**Week** is the same number the iPad's import list shows, so the two can be read
+against each other. **Ready to import** says *yes* only once Dropbox has
+finished uploading, not merely when the file was written.
+
+### When it needs you
+
+A card appears above the table. There are three kinds.
+
+A campaign using add-ons the iPad has not got gets a grey note. It still goes
+over; the iPad offers to take that content out of its own copy, and the Mac save
+is untouched either way.
+
+If both sides have moved on since they last agreed, an orange card names both
+dates and offers **Keep the iPad save** or **Keep the Mac save**. Nothing is
+overwritten until you choose, and whichever loses is in the backups folder.
+
+If an export comes back with its add-on content stripped, it stops and asks
+rather than carrying that loss onto the Mac.
+
+### What it will not do
+
+It never writes into the Steam folder while the game is running; an import waits
+until you quit. It never touches an export Dropbox has not finished downloading.
+And it never writes to your Steam saves except when importing, which is backed
+up first.
+
+---
+
+## Two campaigns, and which is further on
+
+Campaigns are matched by estate name, not by slot number, because the iPad puts
+every imported campaign in a fresh slot and exports every slot it has. An export
+holding three copies of one estate collapses to one.
+
+Which copy is further on is decided by **weeks played**, read from the campaign
+log, then by whether the party is **out on an expedition** rather than back in
+the Hamlet, and only then by the clock. A timestamp says when a file was
+written, which is not the same thing: opening a campaign and leaving again makes
+it the newer save while holding less play.
+
+## The two edits
+
+A Mac campaign needs two changes before the iPad will open it. Both are made on
+the published copy; the Steam save is never altered.
+
+1. **A record in the campaign log.** Each chapter holds numbered entries, and the
+   newer build writes an extra one the iPad's build has never written. The whole
+   entry comes out — removing just the field leaves it behind holding its type
+   marker, which the iPad refuses just the same.
+2. **The Butcher's Circus** in the record of add-ons the game has shown you. It
+   never came to iOS, and its presence makes the iPad ask about add-ons it cannot
+   provide.
+
+Nothing else is changed. Things that look like they should matter and do not:
+the Circus building in the Hamlet, the add-on currencies and trinkets in the
+estate, the per-hero fields the newer build adds, the upgrade trees the iPad does
+not know, and the build number stamped into each file.
+
+Every rewritten file is checked three ways before publishing: it must read back
+as the same bytes, its object tree must agree with itself, and every value must
+stand on the four-byte boundary it stood on before. Three separate faults were
+caught only by the second and third of those, each a number written into the file
+that nothing read back.
+
+## The command line
+
+`stagecoach-cli` does the same work without the menu bar.
 
 ```
-stagecoach-cli scan                          detected folders, each side's state, the ledger
-stagecoach-cli steam-check                   open a Steam session as Darkest Dungeon, list cloud files
-stagecoach-cli steam-write-test              read steam_init.json from the cloud, write it back unchanged
-stagecoach-cli steam-push profile_N [dir]    write a profile folder to Steam Cloud through the client
-stagecoach-cli codec-check [dir]             read and rewrite every save under a folder, byte for byte
-stagecoach-cli prepare profile_N             publish a copy of a Mac campaign the iPad can open
-stagecoach-cli sync                          one sync pass with the real folders
+scan                          what was found, and the state of each side
+prepare profile_N [--as slot] [--rename name]
+                              publish a copy of one campaign
+rename <dir> <name>           rename an estate in place
+add-ons <dir>                 which add-ons a campaign uses and has been shown
+codec-check <dir>             read and verify every save file under a folder
+steam-check                   open a Steam session and list the cloud files
+steam-push profile_N          write a campaign to Steam Cloud
+steam-forget profile_N        remove a campaign from Steam Cloud
+sync                          one pass with the real folders
 ```
-
-## How the Steam Cloud push works
-
-Steam has no public way to upload a file into a game's cloud storage, but the
-Steamworks runtime (`libsteam_api.dylib`) lets any process that owns the game
-initialise as that game and call the remote-storage API. Stagecoach borrows
-that dylib from an installed Steam game (any arm64 copy under
-`steamapps/common`; it looks for one and checks it can be loaded), sets
-`SteamAppId=262060`, writes the files, and shuts the session down. For the few
-seconds the session is open, Steam shows the account as playing Darkest
-Dungeon. You can point Settings at a specific dylib, or drop one at
-`~/Library/Application Support/Stagecoach/libsteam_api.dylib`.
-
-The app never opens a Steam session while the game itself is running, and it
-never writes into the Steam folder while the game runs: an import waits until
-the game quits.
 
 ## Where things are
 
 - Ledger and log: `~/Library/Application Support/Stagecoach/`
-- Backups of replaced Mac saves: `~/Library/Application Support/Stagecoach/Backups/<timestamp>/profile_N/` (thirty newest kept)
+- Backups of replaced saves: `~/Library/Application Support/Stagecoach/Backups/`
 - Consumed iPad exports: `Dropbox/Darkest Dungeon Save Sync/Imported exports/`
+
+## Limits worth knowing
+
+Steam Cloud needs the Steam client running; nothing can be written to it
+otherwise. A save imported while Steam is closed waits, and is sent when Steam
+next appears. There is a setting to open Steam for that errand and close it
+again.
+
+The app cannot see the iPad. It learns what is there only when an export
+arrives, and it cannot tidy the duplicate slots the iPad's Import leaves behind.
+Deleting the old slot after importing is yours to do.
+
+Playing on the iPad without importing first, and without exporting afterwards,
+leaves progress nothing else knows about. Exporting when you stop closes that.
